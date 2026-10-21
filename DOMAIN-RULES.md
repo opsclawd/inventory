@@ -1,11 +1,11 @@
-# DOMAIN-RULES.md — Configurable Policy, Tariff, Compatibility & Grading Register
+# DOMAIN-RULES.md — Configurable Policy, Tariff, Compatibility, Site Zoning & Mass-Balance Register
 
 ## 1. Architectural Rule: Configuration vs. Code Invariants
 
 To prevent regulatory or market changes from requiring code deployments, the system strictly separates **Hard Code Invariants** from **Versioned Policy Parameters**:
 
-* **Hard Code Invariants (Enforced in TypeScript Entities / DB Triggers):** Two-phase eBay export locking (`EXPORT_LOCK_PENDING` $\rightarrow$ `EXPORT_LOCK_CONFIRMED`), append-only financial/audit records, strict separation of Vault Admin COD verification from sales brokers, and single-use HMAC gate pass consumption.
-* **Configurable Policy Parameters (Stored in `src/core/config/` or `SystemPolicy` DB Table):** Customs duty percentages, VAT rates, shadow FX multipliers, LHD/RHD part-category mappings, ARA grading multipliers, and jurisdiction-specific document checklists.
+* **Hard Code Invariants (Enforced in TypeScript Entities / DB Triggers):** Multi-schema tenant isolation (`shared`, `salvage`, `cannabis`), Kemptville 19-acre site zoning firewall (`RULE-ZONE-001`), two-phase eBay export locking (`EXPORT_LOCK_PENDING` $\rightarrow$ `EXPORT_LOCK_CONFIRMED`), append-only financial/audit/destruction records, strict separation of Vault Admin COD verification from sales brokers, single-use HMAC gate pass consumption, gram-accurate cannabis mass-balance identity, and dual-witness cannabis destruction (`primaryUserId != witnessUserId`).
+* **Configurable Policy Parameters (Stored in `src/core/config/` or `SystemPolicy` DB Table):** Customs duty percentages, VAT rates, shadow FX multipliers, LHD/RHD part-category mappings, ARA grading multipliers, Kemptville/Ramsayville physical capacity caps, cannabis wet-to-dry moisture loss bands, extraction yield ranges, QAP variance alert thresholds (`RULE-CAN-001`), and jurisdiction-specific document checklists.
 
 ---
 
@@ -61,16 +61,16 @@ To prevent regulatory or market changes from requiring code deployments, the sys
 
 ## 4. Algorithmic Pricing, Landed Cost & FX Reserve Formulas
 
-All configurable parameters live in `src/core/config/pricing-policy.json` and can be updated via the CFO Dashboard after each shipment clears customs.
+All configurable parameters live in `src/core/config/pricing-policy.json` and can be updated via the CFO Dashboard after each shipment clears customs or when regulatory tolerances are adjusted.
 
-### 4.1 Configurable Financial Parameters (Initial Defaults)
+### 4.1 Configurable Financial, Site Zoning & Cannabis Compliance Parameters (Initial Defaults)
 
 ```json
 {
   "metadata": {
     "verificationStatus": "ESTIMATE",
     "effectiveDate": "2026-10-21",
-    "source": "Initial Shipment #1 Baseline (Updated to BROKER_VERIFIED upon customs assessment)",
+    "source": "Initial Shipment #1 & Multi-Tenant Dual-Engine Baseline",
     "approvedBy": "ARCHITECT_CFO"
   },
   "fxRates": {
@@ -119,6 +119,20 @@ All configurable parameters live in `src/core/config/pricing-policy.json` and ca
     "trinidadDepositAlertThresholdTtdMinor": 18000000,
     "cbsaCersValueThresholdCadMinor": 200000,
     "cbsaMarineCutoffHours": 48
+  },
+  "siteZoningLimits": {
+    "kemptvilleMaxUncrushedShellsOnPad": 4,
+    "kemptvilleContainerCount": 4,
+    "ramsayvilleMaxActiveShopVehicles": 8
+  },
+  "cannabisCompliance": {
+    "wetToDryMoistureLossMinPct": 0.72,
+    "wetToDryMoistureLossMaxPct": 0.80,
+    "biomassToCrudeExtractYieldMinPct": 0.10,
+    "biomassToCrudeExtractYieldMaxPct": 0.25,
+    "crudeToDistillateRefinementYieldMinPct": 0.65,
+    "crudeToDistillateRefinementYieldMaxPct": 0.88,
+    "maxUnaccountedVarianceAlertPct": 0.02
   }
 }
 ```
@@ -182,6 +196,8 @@ All configurable parameters live in `src/core/config/pricing-policy.json` and ca
    * Actual hard CAD settled in the Canadian corporate bank account via `CurrencySettlement` (`totalTargetSettledMinor` net of `fxSlippageLossCadMinor`) divided by total CAD cash deployed into the shipment:
    $$\text{RepatriatedCashROI} = \frac{\sum \text{CurrencySettlement.totalTargetSettledCadMinor}}{\text{TotalDeployedShipmentCash}_{\text{CAD}}}$$
 
+---
+
 ## 5. Part Condition Grading & Damage Code Reference
 
 ### 5.1 Mechanical Components (Engines, Transmissions, Axles, Marine Powertrains)
@@ -204,6 +220,8 @@ All configurable parameters live in `src/core/config/pricing-policy.json` and ca
 * **Position 2 (Defect Type):** `D` = Dent, `S` = Scratch/Scuff, `R` = Rust, `H` = Hail, `P` = Parking Ding, `J` = Crack/Tear, `K` = Buckle, `G` = Gouge, `T` = Paint peel.
 * **Position 3 (Credit-Card Units 1–9):** Count of credit-card-sized damage units (`000` = Undamaged Grade A panel).
 
+---
+
 ## 6. Jurisdiction-Specific Compliance Dossier Checklists
 
 ### 6.1 Ontario MTO Salvage-to-Rebuilt File (`R.R.O. 1990, Reg. 601` — Automobiles Only)
@@ -222,3 +240,56 @@ Stored in `Vehicle.rebuildDossierJson` with private file keys in `R2_PRIVATE_EVI
 2. **Large Cash Transaction Alert:** Any single or linked cash transaction $\ge \text{TT\$90,000}$ (`9000000` minor units) triggers a mandatory FIU compliance notice to the Trinidad Vault Admin and Architect/CFO.
 3. **Rule `RULE-COMP-FIU-01` (Deterministic 30-Day Rolling Window for Linked FIU Transactions):** A transaction is evaluated as **linked** if the current `SaleTransaction.grossCollectedMinor` plus the sum of `grossCollectedMinor` across all non-voided `SaleTransaction` records (`marketNode == 'TRINIDAD_VAULT'` and `isVoidedOrReversed == false`) within a **rolling 30-calendar-day window (`createdAt >= now() - 30 days`)** matching the same `buyerPhoneE164`, normalized `lower(trim(buyerName))`, or `buyerIdNumberEncrypted` reaches or exceeds `5000000` ($\text{TT\$50,000}$) for the CDD Government ID gate, or `9000000` ($\text{TT\$90,000}$) for the Large Cash Transaction Alert.
 
+---
+
+## 7. Kemptville 19-Acre Site Zoning & Multi-Tenant Location Invariant (`RULE-ZONE-001`)
+
+**Context:** The 19-acre Kemptville property (`siteCode == 'KEMP'`) hosts both a dedicated 100ft x 100ft salvage container pad (`ORG_SALVAGE_EXPORT`) and agricultural/nursery zones (`ORG_CANNABIS_NURSERY_PROC`). To protect municipal clean-yard compliance and Health Canada site inspection optics, physical location barcodes are strictly partitioned by zone and organization:
+
+* **Rule (`RULE-ZONE-001`):**
+  1. **`ZONE_CONTAINER_PAD` (100ft x 100ft Pad, Containers `C01`–`C04`, e.g., `KEMP-C01-R01-S01-B01`):** Strictly restricted to `ORG_SALVAGE_EXPORT` assets (`salvage.Vehicle` and `salvage.Part`). Maximum **4 uncrushed vehicle shells** (`STAGED_ONTARIO_YARD`, `DISMANTLING_IN_PROGRESS`, or `HULK_AWAITING_SCRAP`) may occupy the pad at any time (`kemptvilleMaxUncrushedShellsOnPad = 4`).
+  2. **`ZONE_GREENHOUSE_AG` & `ZONE_TREE_FARM` (e.g., `KEMP-GRNH-R1-T1`, `KEMP-TREE-R1-B1`) and Brockville Facility (`BROCK-PROP-R1-T2`):** Strictly restricted to agricultural and nursery operations (`ORG_CANNABIS_NURSERY_PROC` — `cannabis.CannabisLot`).
+  3. **Cross-Zone & Cross-Tenant Scan Hard Block:** Scanning any `salvage.Vehicle` or `salvage.Part` into a `ZONE_GREENHOUSE_AG`, `ZONE_TREE_FARM`, or `BROCK` barcode—or scanning any `cannabis.CannabisLot` into `ZONE_CONTAINER_PAD`, `RAMS`, or `POSV`—is **hard-blocked** at the application and database layers (HTTP `422 Unprocessable Entity` — `SITE_ZONING_VIOLATION`).
+
+| Site & Zone Code (`siteCode` / `zoneCode`) | Owning Organization (`Organization.code`) | Allowed Domain Entities | Capacity & Compliance Gate |
+| :--- | :--- | :--- | :--- |
+| **`KEMP` / `ZONE_CONTAINER_PAD`** | `ORG_SALVAGE_EXPORT` | `salvage.Vehicle`, `salvage.Part` | Max 4 uncrushed shells on 100ft x 100ft pad; 4x 40ft containers (`C01`–`C04`). |
+| **`KEMP` / `ZONE_GREENHOUSE_AG`** | `ORG_CANNABIS_NURSERY_PROC` | `cannabis.CannabisLot` | Zero automotive/marine salvage items permitted; Health Canada nursery perimeter. |
+| **`KEMP` / `ZONE_TREE_FARM`** | `ORG_CANNABIS_NURSERY_PROC` | `cannabis.CannabisLot` | Agricultural/horticultural propagation only; zero salvage parts/vehicles permitted. |
+| **`RAMS` / `ZONE_RAMSAYVILLE_SHOP`** | `ORG_SALVAGE_EXPORT` | `salvage.Vehicle`, `salvage.Part` | Max 8 active vehicles (`ramsayvilleMaxActiveShopVehicles = 8`). |
+| **`POSV` / `ZONE_TRINIDAD_VAULT`** | `ORG_SALVAGE_EXPORT` | `salvage.Vehicle`, `salvage.Part` | Bonded family warehouse in Port of Spain; weekly blind cycle counts (`FR-VLT-05`). |
+| **`BROCK` / `ZONE_BROCKVILLE_FACILITY`** | `ORG_CANNABIS_NURSERY_PROC` | `cannabis.CannabisLot` | Indoor propagation, drying/curing, extraction ("moving the juice"), and CTLS vault. |
+
+---
+
+## 8. Cannabis Mass-Balance, Extraction Yield & CTLS Category Rules (`RULE-CAN-001`)
+
+**Context:** Health Canada's Cannabis Tracking and Licensing System (CTLS) and the Canada Revenue Agency (CRA Form B300) require gram-accurate monthly reconciliation across all cultivation and processing stages.
+
+### 8.1 Mass-Balance Reconciliation & Automatic QAP Alert Rules (`RULE-CAN-001`)
+
+1. **Gram-Accurate Mass-Balance Equation:**
+   Every processing or curing transformation (`CannabisLotTransformation`) must satisfy:
+   $$\text{InputWeight}_{\text{g}} = \text{OutputWeight}_{\text{g}} + \text{MoistureLoss}_{\text{g}} + \text{WasteDestroyed}_{\text{g}} + \text{UnaccountedVariance}_{\text{g}}$$
+2. **Wet-to-Dry Curing Moisture Loss Tolerance (`wetToDryMoistureLossMinPct` / `MaxPct`):**
+   * When transforming `FRESH_HARVEST` into `DRIED_FLOWER` and `TRIM_BIOMASS`, expected water weight loss is **`72.0%`–`80.0%`** of `inputWeightGrams` (yielding `20.0%`–`28.0%` dry biomass). Curing runs outside this band require a QAP review note.
+3. **Extraction & Refinement Yield Ranges ("Moving the Juice"):**
+   * **Primary Extraction (`DRIED_FLOWER` / `TRIM_BIOMASS` $\rightarrow$ `CRUDE_EXTRACT`):** Expected yield range of **`10.0%`–`25.0%`** of input biomass weight; spent raffinate/biomass must be logged under `wasteDestroyedGrams` and linked to a dual-witness `CannabisDestructionLog`.
+   * **Distillation / Isolation (`CRUDE_EXTRACT` $\rightarrow$ `DISTILLATE_OR_ISOLATE`):** Expected yield range of **`65.0%`–`88.0%`** of crude input weight.
+4. **Automatic QAP Variance Hold (`maxUnaccountedVarianceAlertPct = 2.0%`):**
+   * Whenever unaccounted processing variance exceeds **`2.0%`** of input weight:
+     $$\frac{|\text{UnaccountedVariance}_{\text{g}}|}{\text{InputWeight}_{\text{g}}} > 0.020$$
+   * The system automatically sets `CannabisLotTransformation.varianceAlertFlagged = true`, places the target `CannabisLot` into `complianceHold = true`, and blocks outbound transfer or sale until `CANNABIS_QAP_COMPLIANCE` signs off (`verifiedByQapUserId`).
+
+### 8.2 Canonical Health Canada CTLS & CRA B300 Stage Mapping
+
+| `CannabisLotStage` | `trackingUnit` | CTLS Monthly Reporting Category | Mandatory Compliance & Quality Gate |
+| :--- | :---: | :--- | :--- |
+| **`MOTHER_PLANT`** | `PLANTS` | Vegetative Cannabis Plants | Bound to `CannabisStrain`; parent source for `CLONE_TRAY` batches. |
+| **`CLONE_TRAY`** | `PLANTS` | Vegetative Cannabis Plants | Spawned via 3-Tap Mother scan (`FR-CAN-01`); ZPL tray tag printed. |
+| **`VEGETATIVE_BATCH`** | `PLANTS` | Vegetative Cannabis Plants | Tracked by plant count; any culled plants require dual-witness `CannabisDestructionLog`. |
+| **`FRESH_HARVEST`** | `GRAMS` | Whole Cannabis Plants / Fresh Cannabis | Wet harvest weight recorded immediately upon chop prior to drying room hang. |
+| **`DRIED_FLOWER`** | `GRAMS` | Dried Cannabis | Reconciled against `FRESH_HARVEST` (`72%–80%` moisture loss); requires `labCoaStorageKey` for release. |
+| **`TRIM_BIOMASS`** | `GRAMS` | Dried Cannabis (Trim / Shake) | Input feedstock for extraction ("moving the juice"). |
+| **`CRUDE_EXTRACT`** | `GRAMS` | Cannabis Extracts (Unrefined) | Reconciled against input biomass + spent raffinate destruction log. |
+| **`DISTILLATE_OR_ISOLATE`** | `GRAMS` | Cannabis Extracts (Refined) | Requires private R2 Lab CoA PDF (`labCoaStorageKey`) and `complianceHold == false` prior to B2B transfer. |

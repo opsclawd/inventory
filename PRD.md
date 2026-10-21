@@ -1,13 +1,17 @@
-# PRD-MVP.md — Functional Specification & Phased Execution Backlog
+# PRD.md — Functional Specification & Phased Execution Backlog
 
 ## 1. Product Scope & Operational Mandate
 
-This Product Requirements Document (PRD) defines the functional workflows, role permissions, acceptance criteria, and phased delivery milestones for the **Cross-Border Salvage, Rebuild & Vault ERP**. 
+This Product Requirements Document (PRD) defines the functional workflows, role permissions, acceptance criteria, and phased delivery milestones for the **Unified Multi-Tenant Modular Monolith**, which powers two distinct partner-operated businesses on **80% shared physical warehouse infrastructure** (`shared` DB schema — QR/ZPL thermal printing, mobile camera barcode scanning, hierarchical `StorageLocation` bins, receipt-gated `Expense` subledger, and private Cloudflare R2 evidence storage):
+
+1. **Engine 1 (`ORG_SALVAGE_EXPORT` — `salvage` DB schema):** Kemptville Auto/Marine Dismantling, Ramsayville Vehicle Flips, and Trinidad Bonded Vault Export.
+2. **Engine 2 (`ORG_CANNABIS_NURSERY_PROC` — `cannabis` DB schema):** Brockville JV & Kemptville Health Canada Cannabis Nursery (mother plants, clones, and genetics) and Processing ("moving the juice" / extraction & bulk lot transformation).
 
 To avoid premature engineering bloat, delivery is strictly gated by operational proof and split so software never blocks vessel departure:
-* **Phase 1A (Pre-Vessel Departure — Weekend Build):** Asset & Part QR/photo/bin intake (`FR-INT-01`, `FR-INT-02`), Expense logging with receipt photo (`FR-EXP-01`), and Broker-Ready Commercial Invoice & Packing List CSV/PDF export (`FR-LOG-01`, `FR-LOG-02`). *(Automated CERS fixed-width `.txt` generation is deferred to the licensed customs broker for Shipment #1).*
+* **Phase 1A (Pre-Vessel Departure — Weekend Build):** Shared Core (`shared` schema) + Salvage Shipment #1 MVP (`salvage` schema): Asset & Part QR/photo/bin intake (`FR-INT-01`, `FR-INT-02`), Expense logging with receipt photo (`FR-EXP-01`), and Broker-Ready Commercial Invoice & Packing List CSV/PDF export (`FR-LOG-01`, `FR-LOG-02`). *(Automated CERS fixed-width `.txt` generation is deferred to the licensed customs broker for Shipment #1).*
 * **Phase 1B (During 14-Day Ocean Transit):** Trinidad Vault check-in (`FR-VLT-01`), Landed Cost allocation (`FR-VLT-02`), and Adaptive Mobile Checkout (`FR-CHK-01` / `FR-VLT-03`) covering both Ontario Domestic sales (CAD + Taz's Shop Float) and Trinidad Vault Cash-on-Delivery (COD) release.
-* **Phase 2 (Days 31–60 — Yard Offline Resilience, Blind Cycle Counts & CFO Subledger):** Offline-first IndexedDB Stripper PWA, Weekly Blind Cycle Counts (`FR-VLT-05`), "Bad Cop" Pre-Auction Deal Analyzer, receipt-enforced Expense Subledger, and QuickBooks/Xero GL sync.
+* **Phase 2A (Days 31–60 — Yard Offline Resilience, Blind Cycle Counts & CFO Subledger):** Offline-first IndexedDB Stripper PWA, Weekly Blind Cycle Counts (`FR-VLT-05`), "Bad Cop" Pre-Auction Deal Analyzer (`FR-DEAL-01`), receipt-enforced Expense Subledger, and QuickBooks/Xero GL sync.
+* **Phase 2B (Days 45–90 — Cannabis Nursery, Mass-Balance Processing & CTLS Compliance):** Cannabis Compliance Module (`cannabis` schema, `FR-CAN-01` to `FR-CAN-04`), leveraging the already-built QR scanner, ZPL thermal printer, hierarchical location engine, and receipt-gated expense ledger as Brockville/Kemptville facility operations come online.
 * **Phase 3 (Months 3–6 — Assistive AI Vision, Two-Phase eBay Sync, Two-Step Gate Token & B2B Storefront):** BullMQ AI Vision OCR/grading proposals, eBay Inventory/Browse API integration with Two-Phase Export Locking (`EXPORT_LOCK_PENDING` $\rightarrow$ `EXPORT_LOCK_CONFIRMED`), Two-Step HMAC Gate Token exit scanning, and the Live Container B2B Storefront with WhatsApp notifications.
 
 ### 1.1 Phase 1 Operational Proof Gate (Pass/Fail Criteria to Unlock Phase 2)
@@ -20,25 +24,38 @@ Engineering work on Phase 2 and Phase 3 is strictly gated on Shipment #1 clearin
 
 ---
 
-## 2. Sanitized Role-Based Access Control (RBAC) Matrix
+## 2. Sanitized Role-Based Access Control (RBAC) Matrix & Workspace Switcher
 
-Authentication is enforced via Supabase Auth with Row-Level Security (RLS) and API route guards. Users holding `ARCHITECT_CFO` or `TRINIDAD_VAULT_ADMIN` roles MUST have Multi-Factor Authentication (`mfaEnrolled = true`) enabled, and privileged financial or gate-release mutations verify active JWT session assurance (`aal2`) via Supabase Auth (`auth.jwt()->>'aal' = 'aal2'`), not merely the `User.mfaEnrolled` boolean.
+Authentication is enforced via Supabase Auth with Row-Level Security (RLS) and API route guards. Users holding `ARCHITECT_CFO`, `TRINIDAD_VAULT_ADMIN`, or `CANNABIS_QAP_COMPLIANCE` roles MUST have Multi-Factor Authentication (`mfaEnrolled = true`) enabled, and privileged financial, compliance, or gate-release mutations verify active JWT session assurance (`aal2`) via Supabase Auth (`auth.jwt()->>'aal' = 'aal2'`), not merely the `User.mfaEnrolled` boolean.
 
-| Capability / Requirement ID | `ARCHITECT_CFO` | `HUNTER_MECHANIC` | `ONTARIO_STRIPPER` | `TRINIDAD_VAULT_ADMIN` | `OVERSEAS_B2B_BUYER` |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **FR-DEAL-01:** Create Pre-Auction Deal Proposal | CRUD + Approve | Create / Read | No Access | No Access | No Access |
-| **FR-DEAL-02:** Override Capital Gate Lock | Execute (Audited) | Denied | No Access | No Access | No Access |
-| **FR-INT-01:** Intake Whole Asset (Auto / Marine / Equip) | CRUD | Create / Update | Read (Strip Queue) | Read (Exported) | No Access |
-| **FR-INT-02:** Strip Part, Bind QR & Scan Bin | CRUD | Create / Relocate | Create / Relocate | No Access | No Access |
-| **FR-EXP-01:** Log Expense with Private Receipt | CRUD + Reversal | Create / Read | No Access | Create (Port Fees) | No Access |
-| **FR-LOG-01:** Scan Parts/Assets to Export Pallet | CRUD | Create / Read | Execute Scan | Read Manifest | Read ("Loading" Tab) |
-| **FR-LOG-02:** Seal Pallet & Export Broker Package | CRUD + Seal | Read Packing List | No Access | Read / Download | No Access |
-| **FR-CHK-01:** Execute Ontario Domestic Checkout (CAD Walk-In / FB / Kijiji / Lot) | CRUD | Execute (CAD Only) | No Access | No Access | No Access |
-| **FR-VLT-01:** Check-In Landed Shipment to Vault | CRUD | Read Status | No Access | Execute Check-In | No Access |
-| **FR-VLT-02:** Create 24h B2B Part/Vehicle Reservation | CRUD | Create (Broker) | No Access | CRUD | Create (Rate-Limited) |
-| **FR-VLT-03:** Verify Trinidad Vault COD Payment & Release | Execute (MFA aal2 Required) | **Denied (Hard Lock)** | No Access | **Execute (MFA aal2 Required)** | No Access |
-| **FR-VLT-04:** Log Broker Commission & FX Batch | CRUD + Reconcile | Read Own Leads | No Access | Create / Execute | Read Own Commission |
-| **FR-VLT-05:** Execute Weekly Blind Cycle Count | CRUD + Trigger + Audit | No Access | No Access | Execute Count | No Access |
+| Capability / Requirement ID | `ARCHITECT_CFO` | `HUNTER_MECHANIC` | `ONTARIO_STRIPPER` | `TRINIDAD_VAULT_ADMIN` | `OVERSEAS_B2B_BUYER` | `CANNABIS_QAP_COMPLIANCE` | `NURSERY_CULTIVATION_TECH` |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **FR-DEAL-01:** Create Pre-Auction Deal Proposal | CRUD + Approve | Create / Read | No Access | No Access | No Access | No Access | No Access |
+| **FR-DEAL-02:** Override Capital Gate Lock | Execute (Audited) | Denied | No Access | No Access | No Access | No Access | No Access |
+| **FR-INT-01:** Intake Whole Asset (Auto / Marine / Equip) | CRUD | Create / Update | Read (Strip Queue) | Read (Exported) | No Access | No Access | No Access |
+| **FR-INT-02:** Strip Part, Bind QR & Scan Bin | CRUD | Create / Relocate | Create / Relocate | No Access | No Access | No Access | No Access |
+| **FR-EXP-01:** Log Expense with Private Receipt | CRUD + Reversal | Create / Read | No Access | Create (Port Fees) | No Access | Create / Read (Cannabis) | Create (Nursery Supplies) |
+| **FR-LOG-01:** Scan Parts/Assets to Export Pallet | CRUD | Create / Read | Execute Scan | Read Manifest | Read ("Loading" Tab) | No Access | No Access |
+| **FR-LOG-02:** Seal Pallet & Export Broker Package | CRUD + Seal | Read Packing List | No Access | Read / Download | No Access | No Access | No Access |
+| **FR-CHK-01:** Execute Ontario Domestic Checkout (CAD Walk-In / FB / Kijiji / Lot) | CRUD | Execute (CAD Only) | No Access | No Access | No Access | No Access | No Access |
+| **FR-VLT-01:** Check-In Landed Shipment to Vault | CRUD | Read Status | No Access | Execute Check-In | No Access | No Access | No Access |
+| **FR-VLT-02:** Create 24h B2B Part/Vehicle Reservation | CRUD | Create (Broker) | No Access | CRUD | Create (Rate-Limited) | No Access | No Access |
+| **FR-VLT-03:** Verify Trinidad Vault COD Payment & Release | Execute (MFA aal2 Required) | **Denied (Hard Lock)** | No Access | **Execute (MFA aal2 Required)** | No Access | No Access | No Access |
+| **FR-VLT-04:** Log Broker Commission & FX Batch | CRUD + Reconcile | Read Own Leads | No Access | Create / Execute | Read Own Commission | No Access | No Access |
+| **FR-VLT-05:** Execute Weekly Blind Cycle Count | CRUD + Trigger + Audit | No Access | No Access | Execute Count | No Access | No Access | No Access |
+| **FR-CAN-01:** 3-Tap Nursery Clone & Mother Tracking | CRUD | Create / Relocate | No Access | No Access | No Access | CRUD + Hold/Release | Create / Relocate |
+| **FR-CAN-02:** Mass-Balance Processing & Extraction Ledger | CRUD + Audit | Execute Run | No Access | No Access | No Access | CRUD + Verify Variance | Execute Run |
+| **FR-CAN-03:** Dual-Witness Destruction Workflow | Execute / Witness | Witness Only | No Access | No Access | No Access | Execute / Witness (QAP) | Execute / Witness |
+| **FR-CAN-04:** Health Canada CTLS & CRA B300 Monthly Export | CRUD + Export | Read Summary | No Access | No Access | No Access | CRUD + Sign-Off + Export | No Access |
+
+### 2.1 Organization Workspace Switcher & Multi-Tenant View Isolation
+
+* **Single-Organization Roles:**
+  * **Salvage-Only Roles (`ONTARIO_STRIPPER`, `TRINIDAD_VAULT_ADMIN`, `OVERSEAS_B2B_BUYER`):** Bound exclusively to `ORG_SALVAGE_EXPORT`. They only see Salvage/Vault navigation, locations (`KEMP-C01..C04`, `RAMS`, `POSV`), and `salvage` schema views; the Workspace Switcher is hidden.
+  * **Cannabis-Only Roles (`CANNABIS_QAP_COMPLIANCE`, `NURSERY_CULTIVATION_TECH`):** Bound exclusively to `ORG_CANNABIS_NURSERY_PROC`. They only see Brockville/Kemptville Nursery & Processing navigation, locations (`BROCK`, `KEMP-GRNH`, `KEMP-TREE`), and `cannabis` schema views; they have zero visibility into `salvage` tables or automotive cash sales.
+* **Dual-Workspace Partner Roles (`ARCHITECT_CFO`, `HUNTER_MECHANIC`):**
+  * Hold `OrganizationMembership` rows in both `ORG_SALVAGE_EXPORT` and `ORG_CANNABIS_NURSERY_PROC`.
+  * Render a persistent header **Organization Workspace Switcher** (`[Auto & Marine Export]` $\leftrightarrow$ `[Cannabis Nursery & Processing]`). Switching workspaces refreshes the active JWT `organization_id` claim so all shared tables (`StorageLocation`, `Expense`, `CashCustodyTransfer`, `CustodyEvent`, `AuditLog`) and domain queries are strictly scoped to the selected business entity.
 
 ---
 
@@ -65,6 +82,7 @@ Phase 1 is engineered around the immediate proof-of-concept shipment to Port of 
      * `LHD_ONLY`: Left-hand-drive steering racks, columns, dashboards, interior trim, master window switches, wiper linkages, and LHD-beam headlamps.
   3. **Hazmat & Safety Screen:** Any airbag module (`8708.95`) or uncertified hazardous component must be flagged `isHazmatOrAirbag = true` and automatically placed into `complianceState = 'QUARANTINED_RECALL_OR_DG'` (blocked from LCL air/ocean pallet scanning unless dangerous goods documentation is explicitly attached).
   4. **Online vs. Offline Initial Custody State Transition:** When a worker completes the 3-Tap Part Strip workflow online and scans both the part QR (`PRT-XXXXXX`) and a valid destination storage bin QR (`toLocationBarcode`), the system creates the `Part` and immediately transitions `custodyState` to `SHELVED_ONTARIO_CONTAINER` in a single atomic transaction (recording the `CustodyEvent`). `STRIPPED_RAW_OFFLINE` is strictly a transient initial state for parts captured on the yard floor without a destination bin scan or queued offline in IndexedDB prior to container shelving.
+  5. **Kemptville Site Zoning Guard (`RULE-ZONE-001`):** Scanning any `salvage.Part` or `salvage.Vehicle` into a Kemptville Greenhouse (`ZONE_GREENHOUSE_AG`), Tree Farm (`ZONE_TREE_FARM`), or Brockville (`BROCK`) location barcode is hard-blocked (`422 SITE_ZONING_VIOLATION`).
 * **Acceptance Criteria:**
   * Scanning a duplicate `PRT-XXXXXX` code already bound to another part returns HTTP `409 Conflict` and triggers an immediate visual/audio alert.
   * Every location scan (for either a `Part` or a whole `Vehicle`) appends an immutable `CustodyEvent` containing the client's UUIDv7 `idempotencyKey` and `expectedVersion`.
@@ -126,16 +144,16 @@ Phase 1 is engineered around the immediate proof-of-concept shipment to Port of 
   5. **Phase 1 & 2 Atomic Release vs. Phase 3 Two-Step Gate Token:** In **Phase 1 and 2**, upon payment verification, the system marks the broker's commission as payable, sets item `availabilityState = 'PAID_SETTLED'`, and atomically stamps `gateReleasedAt = now()`, transitioning child parts to `custodyState = 'SOLD_AND_RELEASED'` (and whole assets to `lifecycleState = 'SOLD_EXPORT_COD'`). In **Phase 3** (when dedicated exit guards operate separately from counter staff), verification issues a **Single-Use HMAC-SHA256 Gate Release QR Token** (`gateTokenNonce`, valid for 4 hours) consumed at the warehouse exit (returning HTTP `410 Gone` on replay).
 
 #### FR-VLT-04: Commercial Bank Cap, Cash Custody Transfers & FX Repatriation Batch Ledger
-* **Description:** Tracks TTD cash deposited from the Vault safe (`HELD_AT_TRINIDAD_VAULT`) into Trinidadian commercial banks (`DEPOSITED_TRINIDAD_BANK`) via `CashCustodyTransfer` and logs conversion batches (`CurrencySettlement`) back into CAD/USD.
+* **Description:** Tracks TTD cash deposited from the Vault safe (`HELD_IN_TRINIDAD_VAULT`) into Trinidadian commercial banks (`DEPOSITED_TRINIDAD_BANK`) via `CashCustodyTransfer` and logs conversion batches (`CurrencySettlement`) back into CAD/USD.
 * **Acceptance Criteria:**
   * Displays running TTD balances per bank institution and triggers a warning banner at $\text{TTD \$180,000}$ (protecting the $\text{TTD \$200,000}$ Deposit Insurance Corporation limit on TTD accounts).
   * Records the `effectiveClearingRate` and `fxSlippageLossCadMinor` on every repatriation wire so future TTD floor prices automatically adjust to real-world FX spreads.
 
 ---
 
-## 4. Phase 2 Functional Requirements (Offline PWA, Blind Cycle Counts & CFO Subledger)
+## 4. Phase 2 Functional Requirements (Phase 2A Salvage Extensions & Phase 2B Cannabis Compliance)
 
-### Module E (Phase 2 Extension): Vault Anti-Shrinkage & Deposit Reconciliation (`src/modules/logistics-vault`)
+### Module E (Phase 2A Extension): Vault Anti-Shrinkage & Deposit Reconciliation (`src/modules/logistics-vault`)
 
 #### FR-VLT-05: Weekly Blind Cycle Counts & Bank Deposit Reconciliation
 * **Description:** Replaces single-operator gate-token theatre with physical inventory verification. Once per week (or triggered on demand by `ARCHITECT_CFO`), the system generates a `CycleCountTask` batch selecting up to 10 random `SHELVED_TRINIDAD_VAULT` parts/vehicles without revealing the expected shelf bin prior to arrival.
@@ -143,26 +161,61 @@ Phase 1 is engineered around the immediate proof-of-concept shipment to Port of 
   * `TRINIDAD_VAULT_ADMIN` must scan the physical QR code on the shelf (`scannedLocationBarcode`) and capture a live timestamped photo (`liveVerificationPhotoKey` in `R2_PRIVATE_EVIDENCE_BUCKET`).
   * Any missing or unverified item transitions the task to `DISCREPANCY_ALERT` on the CFO Dashboard and cross-checks physical Vault stock against recorded `SaleTransaction` rows and TTD bank deposit slips.
 
-### Module F: "Bad Cop" CFO Deal Analyzer & Expense Subledger (`src/modules/cfo-subledger`)
+### Module F (Phase 2A): "Bad Cop" CFO Deal Analyzer & Expense Subledger (`src/modules/cfo-subledger`)
 
 #### FR-DEAL-01: Pre-Auction Deal Analyzer & Capital Gate
 * **Description:** Before bidding on a vehicle or watercraft, `HUNTER_MECHANIC` enters the VIN/HIN, auction location, estimated repair items, and target operational lane.
 * **Business Rules:**
   1. Computes Maximum Allowable Bid ($B_{\text{max}}$) by deducting auction buyer fees, towing, estimated shop labor/parts, inspection fees, and the lane's minimum target profit from conservative gross realization.
-  2. Checks active physical capacity limits (max 8 active vehicles at Ramsayville shop; max 4 uncrushed stripped shells at Kemptville yard) and available working capital pool.
+  2. Checks active physical capacity limits (max 8 active vehicles at Ramsayville shop; max 4 uncrushed stripped shells at Kemptville yard `ZONE_CONTAINER_PAD`) and available working capital pool.
   3. Blocks moving a deal to `ACQUIRED_IN_TRANSIT` if the bid exceeds $B_{\text{max}}$ or breaches capacity/capital gates without an audit-logged `ARCHITECT_CFO` approval.
 
 #### FR-EXP-01: Receipt-Enforced Expense Subledger & External GL Sync
-* **Description:** Every dollar spent (auction invoice, towing, aftermarket repair parts, shop labor, freight, customs duty) must be logged as an `Expense` linked to a `Vehicle` or `Shipment`.
+* **Description:** Every dollar spent (auction invoice, towing, aftermarket repair parts, shop labor, freight, customs duty, or cannabis nursery/processing supplies and lab CoA fees) must be logged as an `Expense` scoped to an `organizationId` and linked to a `Vehicle`, `Shipment`, or `CannabisLot`.
 * **Acceptance Criteria:**
   * Submitting an expense without a valid `receiptStorageKey` in `R2_PRIVATE_EVIDENCE_BUCKET` fails at both the API validation layer (HTTP `422`) and the PostgreSQL `CHECK` constraint layer.
   * Confirmed expenses and vault sales emit an `OutboxEvent` that syncs the journal entry to QuickBooks Online / Xero via `IAccountingGlPort`.
 
 ---
 
-## 5. Phase 3 Functional Requirements (Assistive AI, eBay & B2B Portal)
+### Module G (Phase 2B): Cannabis Nursery, Mass-Balance Processing & CTLS Compliance (`src/modules/cannabis-compliance`)
 
-### Module B & C: Assistive AI Vision & Multi-Channel Syndication (`src/modules/marketplace`)
+#### FR-CAN-01: 3-Tap Nursery Clone & Mother Tracking
+* **Description:** Cultivation technicians (`NURSERY_CULTIVATION_TECH`) and QAP staff (`CANNABIS_QAP_COMPLIANCE`) operating in the Brockville JV facility (`BROCK`) or Kemptville agricultural zones (`KEMP` — `ZONE_GREENHOUSE_AG` / `ZONE_TREE_FARM`) shall scan a mother plant QR tag (`MOTHER_PLANT`) to spawn child clone tray batches (`LOT-YYYY-XXXX` in `CLONE_TRAY` stage), print weatherproof ZPL thermal tray tags, and scan destination grow room/table QR codes (e.g., `BROCK-PROP-R1-T2` or `KEMP-GRNH-R1-T1`).
+* **Business Rules:**
+  1. **Genetic Lineage Provenance:** Every spawned `CLONE_TRAY` or `VEGETATIVE_BATCH` lot inherits `strainId` from its `parentMotherLotId` and defaults to `trackingUnit = 'PLANTS'` with an explicit `plantCount`.
+  2. **Kemptville Site Zoning Guard (`RULE-ZONE-001`):** `CannabisLot` barcodes can only be scanned into `StorageLocation` records belonging to `ORG_CANNABIS_NURSERY_PROC` (`BROCK` facility rooms or Kemptville `ZONE_GREENHOUSE_AG` / `ZONE_TREE_FARM`). Scanning a cannabis lot into `ZONE_CONTAINER_PAD`, `RAMS`, or `POSV` is hard-blocked (`422 SITE_ZONING_VIOLATION`).
+* **Acceptance Criteria:**
+  * Spawning a clone tray creates the `CannabisLot` record, prints the ZPL thermal label via the shared `shared-ops` printer adapter, and records an append-only `CustodyEvent` (`cannabisLotId` populated, `partId` and `vehicleId` null).
+
+#### FR-CAN-02: Mass-Balance Processing & Extraction Ledger ("Moving the Juice")
+* **Description:** Operators recording wet-to-dry curing (`FRESH_HARVEST` $\rightarrow$ `DRIED_FLOWER` + `TRIM_BIOMASS`) or biomass-to-extract transformations (`DRIED_FLOWER` / `TRIM_BIOMASS` $\rightarrow$ `CRUDE_EXTRACT` $\rightarrow$ `DISTILLATE_OR_ISOLATE`) shall log a `CannabisLotTransformation` where input weight reconciles to output weight, moisture loss, and witnessed waste to the gram (`0.01g`).
+* **Business Rules:**
+  1. **Strict Conservation of Mass:** At both the API and PostgreSQL `CHECK` constraint layers, every transformation must satisfy:
+     $$\text{InputWeight}_{\text{g}} = \text{OutputWeight}_{\text{g}} + \text{MoistureLoss}_{\text{g}} + \text{WasteDestroyed}_{\text{g}} + \text{UnaccountedVariance}_{\text{g}}$$
+  2. **Automatic Variance & QAP Hold Gate (`RULE-CAN-001`):** If unaccounted processing variance exceeds `2.0%` of input weight ($|\text{UnaccountedVariance}_{\text{g}}| / \text{InputWeight}_{\text{g}} > 0.020$), or if curing moisture loss falls outside the configurable `72.0%–80.0%` band without explanation, the system flags `varianceAlertFlagged = true`, places the target `CannabisLot` on `complianceHold = true`, and blocks outbound movement until `CANNABIS_QAP_COMPLIANCE` signs off (`verifiedByQapUserId`).
+  3. **Waste Linkage:** Any transformation reporting `wasteDestroyedGrams > 0` requires linking or creating a witnessed `CannabisDestructionLog` (`FR-CAN-03`).
+
+#### FR-CAN-03: Dual-Witness Destruction Workflow
+* **Description:** Enforces Health Canada witnessed cannabis destruction rules for plant culls, trim waste, and extraction raffinate/spent biomass.
+* **Business Rules:**
+  1. Creating a `CannabisDestructionLog` requires capturing `weightDestroyedGrams` (and/or `plantsDestroyedCount`), `destructionReason`, `destructionMethod` (e.g., `COMPOST_DENATURED_50_50`), and uploading a timestamped photo (`evidencePhotoStorageKey`) to `R2_PRIVATE_EVIDENCE_BUCKET`.
+  2. **Two Distinct Witnesses (`primaryUserId != witnessUserId`):** Enforced at both the application layer and PostgreSQL `CHECK` constraint (`cannabis_destruction_two_distinct_witnesses`). The primary executor and co-signing witness must be two distinct authenticated users in `ORG_CANNABIS_NURSERY_PROC`, with at least one holding `CANNABIS_QAP_COMPLIANCE` or `ARCHITECT_CFO` authority.
+* **Acceptance Criteria:**
+  * Attempting to submit a destruction log where `primaryUserId == witnessUserId` or without a private R2 evidence photo is rejected at both the API (HTTP `422`) and PostgreSQL constraint layers.
+
+#### FR-CAN-04: Health Canada CTLS & CRA B300 Monthly Export
+* **Description:** Generates monthly regulatory mass-balance inventory summaries for the **Health Canada Cannabis Tracking and Licensing System (CTLS)** and **CRA Form B300 (Cannabis Duty and Information Return)**, and manages Lab Certificate of Analysis (CoA) attachments.
+* **Outputs & Business Rules:**
+  1. **Monthly Mass-Balance Ledger (CSV & PDF):** Aggregates opening inventory, additions (propagation/harvest/processing in), reductions (processing out, witnessed destruction, B2B bulk transfers), and closing inventory across canonical CTLS categories: **Seeds / Vegetative Plants (`PLANTS`), Whole Cannabis Plants / Fresh (`GRAMS`), Dried Cannabis (`GRAMS`), and Cannabis Extracts / Distillate (`GRAMS`)**.
+  2. **Lab CoA Gate (`labCoaStorageKey`):** Bulk extract or dried flower lots cannot be cleared for B2B wholesale release while `complianceHold == true` or without a private Lab CoA PDF (`labCoaStorageKey` in `R2_PRIVATE_EVIDENCE_BUCKET`) verified by `CANNABIS_QAP_COMPLIANCE`.
+  3. **Strict Audit Isolation:** CTLS and CRA B300 export queries run exclusively against `cannabis.*` and `shared.*` rows where `organizationId == ORG_CANNABIS_NURSERY_PROC`, guaranteeing zero leakage of `salvage.*` records.
+
+---
+
+## 5. Phase 3 Functional Requirements & Phased Delivery Roadmap Alignment
+
+### Module B & C (Phase 3): Assistive AI Vision & Multi-Channel Syndication (`src/modules/marketplace`)
 
 #### FR-AI-01: Human-in-the-Loop AI Vision Enrichment
 * **Description:** A BullMQ worker processes newly stripped parts through background cleanup and `IVisionEnrichmentPort` to extract stamped OEM part numbers, suggest ARA condition grades (`A`, `B1`, `B2`, `B3`, `C`), and draft an 80-character eBay title.
@@ -175,11 +228,22 @@ Phase 1 is engineered around the immediate proof-of-concept shipment to Port of 
 * **Acceptance Criteria:**
   * Buyers can place a rate-limited 24-hour reservation hold (`B2BReservation` on either a `Part` or a whole `Vehicle`, enforced by partial unique indexes to prevent overlapping active holds) or submit a `PreOrderWishList` request (filtered by `RHD_ONLY` or `UNIVERSAL` `SteeringSideCompatibility`) that automatically alerts the Deal Analyzer when a matching donor vehicle is evaluated in Ontario.
 
+### 5.1 Phased Delivery Roadmap Alignment (Zero Delay to Trinidad Shipment #1)
+
+| Phase | Target Window | Active Schemas | Core Deliverables & Operational Focus |
+| :--- | :--- | :--- | :--- |
+| **Phase 1A** | Weekend Build (Pre-Vessel Departure) | `shared` + `salvage` | Shared Core (`Organization`, `User`, `StorageLocation`, `Expense`, `CustodyEvent`, R2 buckets, ZPL/QR scanner) + Salvage Intake (`FR-INT-01`, `FR-INT-02`) + Broker Customs Package (`FR-LOG-01`, `FR-LOG-02`) for Trinidad Shipment #1 (Yamaha Jet, Yamaha VR, A/C Machine, Kia/Mazda SUV pallet). |
+| **Phase 1B** | Days 1–14 (During Ocean Transit) | `shared` + `salvage` | Trinidad Vault Check-In (`FR-VLT-01`), Landed Cost & TTD Floor Allocation (`FR-VLT-02`), Adaptive Mobile Checkout (`FR-CHK-01` / `FR-VLT-03`), and FX Repatriation Ledger (`FR-VLT-04`). |
+| **Phase 2A** | Days 31–60 (Post Proof Gate) | `shared` + `salvage` | Offline-first IndexedDB Stripper PWA, Weekly Blind Cycle Counts (`FR-VLT-05`), "Bad Cop" Deal Analyzer (`FR-DEAL-01`), and QuickBooks/Xero GL sync (`FR-EXP-01`). |
+| **Phase 2B** | Days 45–90 (Brockville/Kemptville Ag Online) | `shared` + `cannabis` | Workspace Switcher, 3-Tap Nursery Clone/Mother Tracking (`FR-CAN-01`), Mass-Balance Extraction Ledger (`FR-CAN-02`), Dual-Witness Destruction (`FR-CAN-03`), and CTLS / CRA B300 Reporting (`FR-CAN-04`) reusing 80% of Phase 1 `shared-ops` infrastructure. |
+| **Phase 3** | Months 3–6 (Scale & Automation) | `shared` + `salvage` + `cannabis` | Assistive AI Vision (`FR-AI-01`), Automated Two-Phase eBay Inventory API Sync, Two-Step HMAC Gate Token exit scanning, and Live Container B2B Storefront (`FR-MKT-01`). |
+
 ---
 
 ## 6. Non-Functional Requirements (NFRs) & Quality Gates
 
-* **NFR-SEC-01 (Storage Isolation):** `R2_PRIVATE_EVIDENCE_BUCKET` shall block all public access. Receipts, UVIPs, bank deposit slips, and encrypted customer government ID documents (`buyerIdDocumentStorageKey`) may only be accessed via server-generated pre-signed URLs with a maximum TTL of 15 minutes, logged in `AuditLog`.
-* **NFR-REL-01 (Offline Queue Durability):** The Yard PWA shall queue binary photo blobs and `CustodyEvent` mutations in IndexedDB (`Dexie.js`), display a persistent high-contrast badge showing the count of unsynced items, and block user logout or cache clearing while unsynced mutations exist.
+* **NFR-SEC-01 (Storage Isolation):** `R2_PRIVATE_EVIDENCE_BUCKET` shall block all public access. Receipts, UVIPs, bank deposit slips, encrypted customer government ID documents (`buyerIdDocumentStorageKey`), Lab CoA PDFs (`labCoaStorageKey`), and cannabis destruction evidence photos (`evidencePhotoStorageKey`) may only be accessed via server-generated pre-signed URLs with a maximum TTL of 15 minutes, logged in `AuditLog`.
+* **NFR-SEC-02 (Multi-Schema & RLS Audit Firewall):** PostgreSQL tables are isolated across `shared`, `salvage`, and `cannabis` schemas with Supabase RLS policies enforcing `organizationId = (auth.jwt() ->> 'organization_id')::uuid` so a Health Canada CTLS or CRA Excise audit of `ORG_CANNABIS_NURSERY_PROC` has zero visibility into `salvage` tables or automotive cash sales.
+* **NFR-REL-01 (Offline Queue Durability):** The Yard & Nursery PWA shall queue binary photo blobs and `CustodyEvent` mutations in IndexedDB (`Dexie.js`), display a persistent high-contrast badge showing the count of unsynced items, and block user logout or cache clearing while unsynced mutations exist.
 * **NFR-IDEM-01 (End-to-End Idempotency):** Every barcode scan, offline batch sync, eBay webhook, and WhatsApp webhook must supply a deterministic `Idempotency-Key` enforced by PostgreSQL unique constraints so network retries or double-taps never duplicate records.
-* **NFR-ACC-01 (Gloved & Outdoor Usability):** All mobile scanner and Vault POS screens must conform to WCAG 2.2 AA contrast ratios ($> 4.5:1$), use minimum $56 \times 56\text{ px}$ touch targets for gloved operation, and pair every color indicator (red/green) with distinct text, icon, and audio/haptic cues.
+* **NFR-ACC-01 (Gloved & Outdoor Usability):** All mobile scanner, nursery, and Vault POS screens must conform to WCAG 2.2 AA contrast ratios ($> 4.5:1$), use minimum $56 \times 56\text{ px}$ touch targets for gloved operation, and pair every color indicator (red/green) with distinct text, icon, and audio/haptic cues.
