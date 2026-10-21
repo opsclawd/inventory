@@ -104,8 +104,8 @@ enum OperationalLane {
   WHOLE_UNIT_EXPORT
 }
 
-enum DriveSideCompatibility {
-  UNIVERSAL       // Engines, transmissions, doors, rear clips, suspension, marine parts
+enum SteeringSideCompatibility {
+  UNIVERSAL       // Steering-side geometry neutral (does not bypass OEM part-number fitment verification)
   LHD_ONLY        // North American steering racks, dash, LHD headlamps, master switches
   RHD_ONLY        // RHD-specific steering/interior components
 }
@@ -126,26 +126,37 @@ enum AssetLifecycleState {
   SOLD_EXPORT_COD
 }
 
-enum PartLifecycleState {
+enum PartCustodyState {
   STRIPPED_RAW_OFFLINE
-  ENRICHING_AI_VISION
-  NEEDS_HUMAN_REVIEW        // Fallback when AI confidence < threshold or missing OEM#
   SHELVED_ONTARIO_CONTAINER
-  SYNDICATED_DOMESTIC_LIVE  // Active on eBay Motors
-  RESERVED_B2B_HOLD         // Time-boxed 24h buyer hold
-  EXPORT_LOCK_PENDING       // Scanned for export; waiting for eBay delist 200 OK
-  EXPORT_LOCK_CONFIRMED     // Delisted from eBay; safe to seal into export pallet
-  SOLD_DOMESTIC_PENDING_SHIP
-  SHIPPED_DOMESTIC_SETTLED
-  SCANNED_TO_EXPORT_PALLET
+  ON_EXPORT_PALLET
   IN_TRANSIT_OCEAN_FREIGHT
   CUSTOMS_HOLD_DESTINATION
   SHELVED_TRINIDAD_VAULT
-  PENDING_VAULT_COD_PAYMENT
-  PAID_SETTLED_IN_VAULT
-  RELEASED_AT_VAULT_GATE    // Terminal state after single-use Gate Token scan
-  QUARANTINED_RECALL_OR_DG  // Recalled airbags / uncertified Hazmat quarantine
+  SOLD_AND_RELEASED
   SCRAPPED_OR_DAMAGED
+}
+
+enum InventoryAvailabilityState {
+  AVAILABLE
+  RESERVED_B2B_HOLD
+  COMMITTED_DOMESTIC_SALE
+  PENDING_VAULT_COD_PAYMENT
+  PAID_SETTLED
+}
+
+enum EbaySyncState {
+  NOT_LISTED
+  SYNDICATED_LIVE
+  EXPORT_LOCK_PENDING       // Waiting for automated eBay API 200 OK (Phase 3) or manual delist check (Phase 1)
+  EXPORT_LOCK_CONFIRMED     // Verified zero quantity on eBay; safe to seal pallet
+}
+
+enum PartComplianceState {
+  PENDING_ENRICHMENT
+  NEEDS_HUMAN_REVIEW
+  CLEARED_FOR_SALE
+  QUARANTINED_RECALL_OR_DG
 }
 
 enum AraConditionGradeEnum {
@@ -230,7 +241,7 @@ model User {
   updatedAt         DateTime  @updatedAt
 
   strippedParts     Part[]              @relation("StrippedByUser")
-  custodyEvents     PartCustodyEvent[]
+  custodyEvents     CustodyEvent[]
   loggedExpenses    Expense[]           @relation("LoggedByUser")
   salesExecuted     SaleTransaction[]   @relation("SoldByUser")
   brokeredSales     SaleTransaction[]   @relation("BrokerUser")
@@ -240,102 +251,120 @@ model User {
 }
 
 model StorageLocation {
-  id            String   @id @default(uuid()) @db.Uuid
-  siteCode      String   // "KEMP", "RAMS", "POSV"
-  containerCode String   // "C01".."C04" or "V01"
-  rackCode      String   // "R01".."R10"
-  shelfCode     String   // "S01".."S05"
-  binCode       String   // "B01".."B20"
-  fullQrBarcode String   @unique // e.g., "KEMP-C01-R02-S03-B04"
-  maxWeightKg   Decimal  @default(150.0) @db.Decimal(6, 2)
-  createdAt     DateTime @default(now())
+  id            String    @id @default(uuid()) @db.Uuid
+  siteCode      String    // "KEMP", "RAMS", "POSV"
+  containerCode String    // "C01".."C04" or "V01"
+  rackCode      String    // "R01".."R10"
+  shelfCode     String    // "S01".."S05"
+  binCode       String    // "B01".."B20"
+  fullQrBarcode String    @unique // e.g., "KEMP-C01-R02-S03-B04"
+  maxWeightKg   Decimal   @default(150.0) @db.Decimal(6, 2)
+  createdAt     DateTime  @default(now())
 
   parts         Part[]
+  vehicles      Vehicle[]
 
   @@index([siteCode, containerCode])
 }
 
 model Vehicle {
-  id                          String              @id @default(uuid()) @db.Uuid
-  internalStockNumber         String              @unique // e.g., "AST-2026-0001"
-  assetCategory               AssetCategory       @default(AUTOMOBILE)
-  vinOrHin                    String              @unique // 17-char VIN, 12-char HIN, or Serial#
+  id                          String                     @id @default(uuid()) @db.Uuid
+  internalStockNumber         String                     @unique // e.g., "AST-2026-0001"
+  assetCategory               AssetCategory              @default(AUTOMOBILE)
+  vinOrHin                    String                     @unique // 17-char VIN, 12-char HIN, or Serial#
   year                        Int
   make                        String
   model                       String
   trim                        String?
   engineSpec                  String?
-  odometerKm                  Int?                // Hours or Km for watercraft
+  odometerKm                  Int?                       // Hours or Km for watercraft
   exteriorColor               String?
-  steeringSide                DriveSideCompatibility @default(LHD_ONLY)
-  roadBrand                   RoadVehicleBrand    @default(NONE)
+  steeringSide                SteeringSideCompatibility  @default(LHD_ONLY)
+  roadBrand                   RoadVehicleBrand           @default(NONE)
   operationalLane             OperationalLane
-  lifecycleState              AssetLifecycleState @default(PROPOSED_DEAL)
+  lifecycleState              AssetLifecycleState        @default(PROPOSED_DEAL)
+  availabilityState           InventoryAvailabilityState @default(AVAILABLE)
+  storageLocationId           String?                    @db.Uuid
+  storageLocation             StorageLocation?           @relation(fields: [storageLocationId], references: [id])
 
   // Capital Gate & CFO Deal Analyzer Baseline (CAD Cents)
   estimatedMaxBidCadMinor     Int
-  actualPurchasePriceCadMinor Int                 @default(0)
-  estimatedRepairCadMinor     Int                 @default(0)
-  targetGrossRealizationMinor Int                 @default(0)
-  cfoGateApprovedById         String?             @db.Uuid
+  actualPurchasePriceCadMinor Int                        @default(0)
+  estimatedRepairCadMinor     Int                        @default(0)
+  targetGrossRealizationMinor Int                        @default(0)
+  cfoGateApprovedById         String?                    @db.Uuid
   cfoGateApprovedAt           DateTime?
 
+  // Whole-Unit Export Valuation & Trinidad Vault Pricing (Minor Units / Cents)
+  wholesaleFobUsdMinor        Int?
+  landedCostTtdMinor          Int?
+  vaultFloorPriceTtdMinor     Int?
+
   // Compliance & Inspection Dossier (Keys pointing to R2_PRIVATE_EVIDENCE_BUCKET)
-  rebuildDossierJson          Json?               // Flexible schema for Reg. 601 photos, frame bench, estimate
+  rebuildDossierJson          Json?                      // Flexible schema for Reg. 601 photos, frame bench, estimate
   driveOnSicNumber            String?
   driveOnSicPassedAt          DateTime?
   driveOnSscNumber            String?
   driveOnSscIssuedAt          DateTime?
-  driveOnSscExpiresAt         DateTime?           // driveOnSscIssuedAt + 36 calendar days (AUTOMOBILE only)
+  driveOnSscExpiresAt         DateTime?                  // driveOnSscIssuedAt + 36 calendar days (AUTOMOBILE only)
   uvipStorageKey              String?
 
   // Environmental & Yard Clearance Evidence (R2_PRIVATE_EVIDENCE_BUCKET keys)
-  refrigerantEvacCertKey      String?             // Certified technician recovery record
+  refrigerantEvacCertKey      String?                    // Certified technician recovery record
   fluidsDrainedAt             DateTime?
   steamCleanedReceiptKey      String?
-  scrapMetalTicketKey         String?             // Weigh-scale ticket required for SCRAPPED_METAL_CLEARED
+  scrapMetalTicketKey         String?                    // Weigh-scale ticket required for SCRAPPED_METAL_CLEARED
   scrappedClearedAt           DateTime?
 
   realizedRetailSaleCadMinor  Int?
   soldAt                      DateTime?
-  version                     Int                 @default(1)
-  createdAt                   DateTime            @default(now())
-  updatedAt                   DateTime            @updatedAt
+  version                     Int                        @default(1)
+  createdAt                   DateTime                   @default(now())
+  updatedAt                   DateTime                   @updatedAt
 
   parts                       Part[]
   expenses                    Expense[]
-  shipmentId                  String?             @db.Uuid
-  shipment                    Shipment?           @relation(fields: [shipmentId], references: [id])
+  custodyHistory              CustodyEvent[]
+  b2bReservations             B2BReservation[]
+  shipmentId                  String?                    @db.Uuid
+  shipment                    Shipment?                  @relation(fields: [shipmentId], references: [id])
   saleTransactionItem         SaleTransactionVehicleItem?
 
   @@index([lifecycleState, operationalLane])
+  @@index([availabilityState])
+  @@index([storageLocationId])
   @@index([make, model, year])
 }
 
 model Part {
-  id                         String                 @id @default(uuid()) @db.Uuid
-  qrSkuCode                  String                 @unique // e.g., "PRT-884920"
-  donorVehicleId             String                 @db.Uuid
-  donorVehicle               Vehicle                @relation(fields: [donorVehicleId], references: [id])
-  strippedByUserId           String                 @db.Uuid
-  strippedByUser             User                   @relation("StrippedByUser", fields: [strippedByUserId], references: [id])
+  id                         String                     @id @default(uuid()) @db.Uuid
+  qrSkuCode                  String                     @unique // e.g., "PRT-884920"
+  donorVehicleId             String                     @db.Uuid
+  donorVehicle               Vehicle                    @relation(fields: [donorVehicleId], references: [id])
+  strippedByUserId           String                     @db.Uuid
+  strippedByUser             User                       @relation("StrippedByUser", fields: [strippedByUserId], references: [id])
 
-  lifecycleState             PartLifecycleState     @default(STRIPPED_RAW_OFFLINE)
-  partCategoryName           String                 @default("UNCLASSIFIED")
-  driveSideCompatibility     DriveSideCompatibility @default(UNIVERSAL)
-  isHazmatOrAirbag           Boolean                @default(false) // Triggers UN3268 DG / recall check
+  // Orthogonal State Axes
+  custodyState               PartCustodyState           @default(STRIPPED_RAW_OFFLINE)
+  availabilityState          InventoryAvailabilityState @default(AVAILABLE)
+  ebaySyncState              EbaySyncState              @default(NOT_LISTED)
+  complianceState            PartComplianceState        @default(PENDING_ENRICHMENT)
+
+  partCategoryName           String                     @default("UNCLASSIFIED")
+  steeringSideCompatibility  SteeringSideCompatibility  @default(UNIVERSAL)
+  isHazmatOrAirbag           Boolean                    @default(false) // Triggers UN3268 DG / recall check
   oemPartNumbers             String[]
   interchangePartNumbers     String[]
-  suggestedHsCode            String                 @default("8708.99")
-  brokerVerifiedHsCode       String?                // Authoritative HS code confirmed by customs broker
+  suggestedHsCode            String                     @default("8708.99")
+  brokerVerifiedHsCode       String?                    // Authoritative HS code confirmed by customs broker
 
   // Grading & Physical Specs
-  araGrade                   AraConditionGradeEnum  @default(GRADE_X)
-  araDamageCode              String                 @default("000")
+  araGrade                   AraConditionGradeEnum      @default(GRADE_X)
+  araDamageCode              String                     @default("000")
   conditionNotes             String?
-  aiConfidenceScore          Decimal?               @db.Decimal(4, 3)
+  aiConfidenceScore          Decimal?                   @db.Decimal(4, 3)
   humanVerifiedAt            DateTime?
-  weightKg                   Decimal                @default(2.50) @db.Decimal(6, 2)
+  weightKg                   Decimal                    @default(2.50) @db.Decimal(6, 2)
   dimensionsCm               Json?
 
   // Public Media Assets (R2_PUBLIC_MEDIA_BUCKET URLs — EXIF stripped)
@@ -343,13 +372,13 @@ model Part {
   cleanPhotoUrls             String[]
 
   // Current Location & Logistics Pointers
-  storageLocationId          String?                @db.Uuid
-  storageLocation            StorageLocation?       @relation(fields: [storageLocationId], references: [id])
-  shipmentPalletId           String?                @db.Uuid
-  shipmentPallet             ShipmentPallet?        @relation(fields: [shipmentPalletId], references: [id])
+  storageLocationId          String?                    @db.Uuid
+  storageLocation            StorageLocation?           @relation(fields: [storageLocationId], references: [id])
+  shipmentPalletId           String?                    @db.Uuid
+  shipmentPallet             ShipmentPallet?            @relation(fields: [shipmentPalletId], references: [id])
 
   // Pricing & Valuation (Stored in Minor Units / Cents)
-  allocatedCostBasisCadMinor Int                    @default(0)
+  allocatedCostBasisCadMinor Int                        @default(0)
   compBaselineCadMinor       Int?
   retailPriceCadMinor        Int?
   wholesaleFobUsdMinor       Int?
@@ -357,42 +386,47 @@ model Part {
   vaultFloorPriceTtdMinor    Int?
 
   // External Marketplace Pointers & Optimistic Concurrency
-  ebayOfferId                String?                @unique
-  ebayListingId              String?                @unique
-  ebayTitle                  String?                @db.VarChar(80)
+  ebayOfferId                String?                    @unique
+  ebayListingId              String?                    @unique
+  ebayTitle                  String?                    @db.VarChar(80)
   ebayAspectsJson            Json?
   ebayCompatibilityJson      Json?
-  version                    Int                    @default(1) // Authoritative concurrency counter
+  version                    Int                        @default(1) // Authoritative concurrency counter
 
-  strippedAt                 DateTime               @default(now())
-  updatedAt                  DateTime               @updatedAt
+  strippedAt                 DateTime                   @default(now())
+  updatedAt                  DateTime                   @updatedAt
 
-  custodyHistory             PartCustodyEvent[]
+  custodyHistory             CustodyEvent[]
   b2bReservations            B2BReservation[]
   saleTransactionItem        SaleTransactionPartItem?
 
-  @@index([lifecycleState])
+  @@index([custodyState, availabilityState])
+  @@index([ebaySyncState])
+  @@index([complianceState])
   @@index([donorVehicleId])
   @@index([storageLocationId])
-  @@index([driveSideCompatibility])
+  @@index([steeringSideCompatibility])
 }
 
-// Append-only custody chain replacing naive Last-Write-Wins (LWW) on location scans
-model PartCustodyEvent {
+// Append-only custody chain for both stripped Parts and whole Vehicles/Watercraft
+model CustodyEvent {
   id                  String   @id @default(uuid()) @db.Uuid
-  partId              String   @db.Uuid
-  part                Part     @relation(fields: [partId], references: [id])
+  partId              String?  @db.Uuid
+  part                Part?    @relation(fields: [partId], references: [id])
+  vehicleId           String?  @db.Uuid
+  vehicle             Vehicle? @relation(fields: [vehicleId], references: [id])
   actorUserId         String   @db.Uuid
   actorUser           User     @relation(fields: [actorUserId], references: [id])
   idempotencyKey      String   @unique // Client UUIDv7 generated at scan time
   fromLocationBarcode String?
   toLocationBarcode   String   // Bin QR, Pallet QR, or Vault Shelf QR
-  expectedPartVersion Int
+  expectedVersion     Int
   hasConflict         Boolean  @default(false) // Flagged true if offline scan version mismatches server
   deviceTimestamp     DateTime
   serverReceivedAt    DateTime @default(now())
 
   @@index([partId, serverReceivedAt])
+  @@index([vehicleId, serverReceivedAt])
 }
 
 model Shipment {
@@ -479,28 +513,30 @@ model Expense {
 }
 
 model PreOrderWishList {
-  id                     String                 @id @default(uuid()) @db.Uuid
-  requesterUserId        String                 @db.Uuid
-  requesterUser          User                   @relation(fields: [requesterUserId], references: [id])
+  id                     String                    @id @default(uuid()) @db.Uuid
+  requesterUserId        String                    @db.Uuid
+  requesterUser          User                      @relation(fields: [requesterUserId], references: [id])
   targetYearStart        Int
   targetYearEnd          Int
   targetMake             String
   targetModel            String
-  requiredDriveSide      DriveSideCompatibility @default(RHD_ONLY)
+  requiredSteeringSide   SteeringSideCompatibility @default(RHD_ONLY)
   partDescription        String
   oemPartNumberHint      String?
   maxBidWillingTtdMinor  Int
-  isFulfilled            Boolean                @default(false)
-  matchedPartId          String?                @db.Uuid
-  createdAt              DateTime               @default(now())
+  isFulfilled            Boolean                   @default(false)
+  matchedPartId          String?                   @db.Uuid
+  createdAt              DateTime                  @default(now())
 
   @@index([targetMake, targetModel, isFulfilled])
 }
 
 model B2BReservation {
   id              String   @id @default(uuid()) @db.Uuid
-  partId          String   @db.Uuid
-  part            Part     @relation(fields: [partId], references: [id])
+  partId          String?  @db.Uuid
+  part            Part?    @relation(fields: [partId], references: [id])
+  vehicleId       String?  @db.Uuid
+  vehicle         Vehicle? @relation(fields: [vehicleId], references: [id])
   buyerPhoneE164  String
   brokerUserId    String?  @db.Uuid
   quotedTtdMinor  Int
@@ -509,6 +545,7 @@ model B2BReservation {
   createdAt       DateTime @default(now())
 
   @@index([partId, isActive])
+  @@index([vehicleId, isActive])
 }
 
 model SaleTransaction {
@@ -673,6 +710,35 @@ CREATE TRIGGER lock_audit_log BEFORE UPDATE OR DELETE ON "AuditLog" FOR EACH ROW
 CREATE TRIGGER lock_expense_delete BEFORE DELETE ON "Expense" FOR EACH ROW EXECUTE FUNCTION prevent_audit_tampering();
 CREATE TRIGGER lock_sale_tx_delete BEFORE DELETE ON "SaleTransaction" FOR EACH ROW EXECUTE FUNCTION prevent_audit_tampering();
 
+-- 4b. Block mutation of immutable financial columns on Expense & SaleTransaction while permitting workflow updates
+CREATE OR REPLACE FUNCTION prevent_expense_financial_mutation() RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW."amountOriginalMinor" IS DISTINCT FROM OLD."amountOriginalMinor"
+     OR NEW."amountCadMinor" IS DISTINCT FROM OLD."amountCadMinor"
+     OR NEW."receiptStorageKey" IS DISTINCT FROM OLD."receiptStorageKey" THEN
+    RAISE EXCEPTION 'Immutable financial columns on Expense cannot be modified after creation; log a reversal entry instead.';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER lock_expense_immutable_cols BEFORE UPDATE ON "Expense"
+  FOR EACH ROW EXECUTE FUNCTION prevent_expense_financial_mutation();
+
+CREATE OR REPLACE FUNCTION prevent_sale_tx_financial_mutation() RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW."grossCollectedMinor" IS DISTINCT FROM OLD."grossCollectedMinor"
+     OR NEW."netRealizedCadMinor" IS DISTINCT FROM OLD."netRealizedCadMinor"
+     OR NEW."paymentProofStorageKey" IS DISTINCT FROM OLD."paymentProofStorageKey" THEN
+    RAISE EXCEPTION 'Immutable financial columns on SaleTransaction cannot be modified after creation.';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER lock_sale_tx_immutable_cols BEFORE UPDATE ON "SaleTransaction"
+  FOR EACH ROW EXECUTE FUNCTION prevent_sale_tx_financial_mutation();
+
 -- 5. Enforce DomesticSaleChannel vs ExportSaleChannel by marketNode
 ALTER TABLE "SaleTransaction" ADD CONSTRAINT sale_channel_node_integrity CHECK (
   ("marketNode" = 'ONTARIO_DOMESTIC' AND "domesticChannel" IS NOT NULL AND "exportChannel" IS NULL)
@@ -685,36 +751,50 @@ ALTER TABLE "SaleTransaction" ADD CONSTRAINT ramsayville_vehicle_bill_of_sale_re
   "domesticChannel" != 'RAMSAYVILLE_LOT_RETAIL'
   OR ("billOfSaleStorageKey" IS NOT NULL AND length(trim("billOfSaleStorageKey")) > 0)
 );
+
+-- 7. Enforce XOR target (Part vs. Vehicle) on CustodyEvent & B2BReservation
+ALTER TABLE "CustodyEvent" ADD CONSTRAINT custody_event_target_xor CHECK (
+  ("partId" IS NOT NULL AND "vehicleId" IS NULL) OR ("partId" IS NULL AND "vehicleId" IS NOT NULL)
+);
+
+ALTER TABLE "B2BReservation" ADD CONSTRAINT b2b_reservation_target_xor CHECK (
+  ("partId" IS NOT NULL AND "vehicleId" IS NULL) OR ("partId" IS NULL AND "vehicleId" IS NOT NULL)
+);
+
+-- 8. Prevent overlapping active B2B holds on the same Part or Vehicle
+CREATE UNIQUE INDEX unique_active_part_reservation ON "B2BReservation" ("partId") WHERE "isActive" = true AND "partId" IS NOT NULL;
+CREATE UNIQUE INDEX unique_active_vehicle_reservation ON "B2BReservation" ("vehicleId") WHERE "isActive" = true AND "vehicleId" IS NOT NULL;
 ```
 
 ## 5. Deterministic State Machines & Concurrency Protocols
 
 ### 5.1 Two-Phase Marketplace-to-Export Lock (Preventing Double-Selling)
 
-An external HTTP request to eBay cannot run inside a PostgreSQL transaction. To prevent double-selling between eBay Motors and outbound Trinidad pallets, the system enforces a **Two-Phase Reservation State Machine**:
+An external HTTP request to eBay cannot run inside a PostgreSQL transaction. To prevent double-selling between eBay Motors and outbound Trinidad pallets, the system enforces a **Two-Phase Reservation State Machine** across the orthogonal `ebaySyncState`, `custodyState`, and `availabilityState` axes:
 
 ```text
-[SYNDICATED_DOMESTIC_LIVE]
+[ebaySyncState: SYNDICATED_LIVE]
            │
            │ (Worker scans part for Trinidad export OR B2B buyer reserves)
            ▼
-  [EXPORT_LOCK_PENDING]  ───(Writes OutboxEvent in same DB TX)───► BullMQ Worker calls eBay API
-           │                                                       (bulkUpdatePriceQuantity = 0)
+  [EXPORT_LOCK_PENDING]  ───(Phase 3: Writes OutboxEvent in same DB TX)───► BullMQ Worker calls eBay API
+           │             ───(Phase 1: Supervisor manual delist check)       (bulkUpdatePriceQuantity = 0)
            ├──────────────────────┬──────────────────────────────────────┘
            │                      │
-           ▼ (eBay 200 OK)        ▼ (eBay Order Webhook arrived first!)
-[EXPORT_LOCK_CONFIRMED]   [SOLD_DOMESTIC_PENDING_SHIP]
+           ▼ (eBay 200 OK /       ▼ (eBay Order Webhook arrived first!)
+              Manual Confirm)
+[EXPORT_LOCK_CONFIRMED]   [availabilityState: COMMITTED_DOMESTIC_SALE]
            │                      │
            ▼                      ▼
-[SCANNED_TO_EXPORT_PALLET]  (Pushes Alert to Yard PWA: "PULL PART FROM PALLET — SOLD ON EBAY")
+[custodyState: ON_EXPORT_PALLET] (Pushes Alert to Yard PWA: "PULL PART FROM PALLET — SOLD ON EBAY")
 ```
 
-* **Physical Seal Gate Rule:** `ShipmentPallet.sealedAt` CANNOT be populated if any child `Part` on that pallet is still in `EXPORT_LOCK_PENDING` or `STRIPPED_RAW_OFFLINE`. All parts must reach `EXPORT_LOCK_CONFIRMED` (or have never been listed domestically) before a pallet can be sealed.
+* **Physical Seal Gate Rule:** `ShipmentPallet.sealedAt` CANNOT be populated if any child `Part` on that pallet has `ebaySyncState == 'EXPORT_LOCK_PENDING'` or `custodyState == 'STRIPPED_RAW_OFFLINE'`. All parts must reach `EXPORT_LOCK_CONFIRMED` (or `NOT_LISTED`) before a pallet can be sealed.
 
 ### 5.2 Offline Custody Chain & Conflict Resolution
 
-1. **No Silent Overwrites:** When an offline yard worker scans a part into a container bin or onto a pallet, the PWA appends a `PartCustodyEvent` containing `expectedPartVersion` and a client UUIDv7 `idempotencyKey`.
-2. **Server Reconciliation:** Upon sync, if `Part.version == expectedPartVersion`, the server updates `Part.storageLocationId` and increments `Part.version`. If the version has diverged (e.g., another worker moved the part or it sold online while the device was offline), the server still records the `PartCustodyEvent` with `hasConflict = true` and surfaces a supervisor exception rather than silently dropping or overwriting the location.
+1. **No Silent Overwrites:** When an offline yard worker scans a part or whole asset into a container bin or onto a pallet, the PWA appends a `CustodyEvent` containing `expectedVersion` and a client UUIDv7 `idempotencyKey`.
+2. **Server Reconciliation:** Upon sync, if `version == expectedVersion`, the server updates `storageLocationId` and increments `version`. If the version has diverged (e.g., another worker moved the item or it sold online while the device was offline), the server still records the `CustodyEvent` with `hasConflict = true` and surfaces a supervisor exception rather than silently dropping or overwriting the location.
 
 ### 5.3 Adaptive Checkout, Cash Custody & Trinidad Gate Token Protocol
 
@@ -722,13 +802,13 @@ The unified mobile checkout workflow (`/checkout`) adapts dynamically based on t
 
 1. **Ontario Domestic Mode (`marketNode == 'ONTARIO_DOMESTIC'`):**
    * **Context & Channel Attribution:** Triggered when `HUNTER_MECHANIC` or `ARCHITECT_CFO` scans a `PRT-XXXXXX` part or `AST-XXXXXX` whole vehicle located in Ontario (`KEMP` or `RAMS`). The UI defaults to `CAD` and presents `DomesticSaleChannel` selector pills (`OTTAWA_WALK_IN_CASH`, `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL`, `RAMSAYVILLE_LOT_RETAIL`, `WHOLESALE_MECHANIC_NETWORK`).
-   * **Immediate eBay Delist Outbox:** If any sold part is currently active on eBay (`SYNDICATED_DOMESTIC_LIVE`), the checkout transaction atomically transitions the part to `SHIPPED_DOMESTIC_SETTLED` and writes an `OutboxEvent` (`PartSoldLocallyDelistEbayRequested`) to immediately zero out the eBay Motors offer, preventing online double-sales.
+   * **Immediate eBay Delist Outbox:** If any sold part is currently active on eBay (`ebaySyncState == 'SYNDICATED_LIVE'`), the checkout transaction atomically transitions the part to `custodyState = 'SOLD_AND_RELEASED'`, `availabilityState = 'PAID_SETTLED'`, and writes an `OutboxEvent` (`PartSoldLocallyDelistEbayRequested`) to immediately zero out the eBay Motors offer, preventing online double-sales.
    * **Taz's Shop Float & Cash Custody Tracking:** Cash collected in person sets `cashCustodyState = 'HELD_BY_TAZ_FLOAT'`, creating an auditable shop petty-cash float that can be drawn down when logging shop `Expense` receipts (`paidFromCashCustody = 'HELD_BY_TAZ_FLOAT'`). Interac e-Transfers and wires default to `SETTLED_CANADA_BANK`.
-   * **Whole-Vehicle Lot Release & Break-Even Velocity:** Whole-vehicle retail sales (`RAMSAYVILLE_LOT_RETAIL`) enforce uploading a signed Bill of Sale (`billOfSaleStorageKey`), transition the `Vehicle` to `SOLD_RETAIL_ONTARIO` (freeing 1 of the 8 Ramsayville shop lot slots), and credit `netRealizedCadMinor` (`grossCollectedMinor - platformFeeMinor - shippingCostMinor`) toward the donor VIN's Break-Even Velocity counter and the $20k Capital Buffer. Because there is no separate warehouse security gate in Ontario, `isPaymentVerified` is set to `true` and `gateReleasedAt = now()` upon receipt upload.
+   * **Whole-Vehicle Lot Release & Break-Even Velocity:** Whole-vehicle retail sales (`RAMSAYVILLE_LOT_RETAIL`) enforce uploading a signed Bill of Sale (`billOfSaleStorageKey`), transition the `Vehicle` to `lifecycleState = 'SOLD_RETAIL_ONTARIO'` and `availabilityState = 'PAID_SETTLED'` (freeing 1 of the 8 Ramsayville shop lot slots), and credit `netRealizedCadMinor` (`grossCollectedMinor - platformFeeMinor - shippingCostMinor`) toward the donor VIN's Break-Even Velocity counter and the $20k Capital Buffer. Because there is no separate warehouse security gate in Ontario, `isPaymentVerified` is set to `true` and `gateReleasedAt = now()` upon receipt upload.
 2. **Trinidad Vault Mode (`marketNode == 'TRINIDAD_VAULT'`):**
-   * **Strict Separation of Duties:** Users with `HUNTER_MECHANIC` or `OVERSEAS_B2B_BUYER` roles are hard-blocked at the API and RLS layers from mutating `SaleTransaction.isPaymentVerified` when `marketNode == 'TRINIDAD_VAULT'`. Only `TRINIDAD_VAULT_ADMIN` or `ARCHITECT_CFO` with active MFA can verify payment.
-   * **Single-Use Cryptographic Gate Token:** When `TRINIDAD_VAULT_ADMIN` verifies full payment (`grossCollectedMinor >= sum(vaultFloorPriceTtdMinor)`), uploads payment proof to `R2_PRIVATE_EVIDENCE_BUCKET`, and satisfies the $\ge \text{TT\$50,000}$ FIU CDD ID hash check, the server sets `cashCustodyState = 'HELD_IN_TRINIDAD_VAULT'` (or `'DEPOSITED_TRINIDAD_BANK'`) and generates an HMAC-SHA256 token signed with a KMS secret containing `{ txId, partIds[], vehicleIds[], nonce, exp: now + 4h }`.
-   * **Atomic Gate Consumption:** Scanning the Gate QR at the Port of Spain exit door verifies the HMAC signature, checks `gateReleasedAt IS NULL`, and atomically sets `gateReleasedAt = now()` and all child parts to `RELEASED_AT_VAULT_GATE` (and whole vehicles/watercraft to `SOLD_EXPORT_COD`). Replay attempts fail immediately with HTTP `410 Gone`.
+   * **Strict Separation of Duties & MFA `aal2` Enforcement:** Users with `HUNTER_MECHANIC` or `OVERSEAS_B2B_BUYER` roles are hard-blocked at the API and RLS layers from mutating `SaleTransaction.isPaymentVerified` when `marketNode == 'TRINIDAD_VAULT'`. Only `TRINIDAD_VAULT_ADMIN` or `ARCHITECT_CFO` holding an active Supabase Auth JWT with Authenticator Assurance Level 2 (`aal2`) can verify payment.
+   * **Single-Use Cryptographic Gate Token:** When `TRINIDAD_VAULT_ADMIN` or `ARCHITECT_CFO` verifies full payment (`grossCollectedMinor >= sum(vaultFloorPriceTtdMinor)`), uploads payment proof to `R2_PRIVATE_EVIDENCE_BUCKET`, and satisfies the $\ge \text{TT\$50,000}$ FIU CDD ID hash check, the server sets `cashCustodyState = 'HELD_IN_TRINIDAD_VAULT'` (or `'DEPOSITED_TRINIDAD_BANK'`), updates child items to `availabilityState = 'PAID_SETTLED'`, and generates an HMAC-SHA256 token signed with a KMS secret containing `{ txId, partIds[], vehicleIds[], nonce, exp: now + 4h }`.
+   * **Atomic Gate Consumption:** Scanning the Gate QR at the Port of Spain exit door verifies the HMAC signature, checks `gateReleasedAt IS NULL`, and atomically sets `gateReleasedAt = now()`, all child parts to `custodyState = 'SOLD_AND_RELEASED'`, and whole vehicles/watercraft to `lifecycleState = 'SOLD_EXPORT_COD'`. Replay attempts fail immediately with HTTP `410 Gone`.
 
 ## 6. Hexagonal Ports Specification (`src/core/ports/index.ts`)
 
@@ -769,7 +849,7 @@ export interface IVisionEnrichmentPort {
   }): Promise<{
     extractedOemNumbers: string[];
     partCategoryName: string;
-    driveSideCompatibility: 'UNIVERSAL' | 'LHD_ONLY' | 'RHD_ONLY';
+    steeringSideCompatibility: 'UNIVERSAL' | 'LHD_ONLY' | 'RHD_ONLY';
     isHazmatOrAirbag: boolean;
     suggestedHsCode: string;
     suggestedAraGrade: 'GRADE_A' | 'GRADE_B1' | 'GRADE_B2' | 'GRADE_B3' | 'GRADE_C' | 'GRADE_X';

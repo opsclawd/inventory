@@ -13,10 +13,10 @@ To prevent regulatory or market changes from requiring code deployments, the sys
 
 **Context:** Donor vehicles acquired in Ontario are Left-Hand Drive (`LHD_ONLY`), whereas Trinidad & Tobago and Barbados operate predominantly Right-Hand Drive (`RHD_ONLY`) fleets (alongside universal marine watercraft).
 
-* **Rule (`RULE-FIT-001`):** Any stripped automotive part must be assigned a `DriveSideCompatibility` enum (`UNIVERSAL`, `LHD_ONLY`, `RHD_ONLY`) based on its `partCategoryName` default below, unless explicitly overridden by a human reviewer or matched to a verified LHD Caribbean buyer wish-list.
+* **Rule (`RULE-FIT-001`):** Any stripped automotive part must be assigned a `SteeringSideCompatibility` enum (`UNIVERSAL`, `LHD_ONLY`, `RHD_ONLY`) based on its `partCategoryName` default below, unless explicitly overridden by a human reviewer or matched to a verified LHD Caribbean buyer wish-list. **Important Fitment Clarification:** `UNIVERSAL` indicates **steering-side geometry neutrality only** (i.e., the part is not physically mirrored between LHD and RHD cockpits/firewalls); it does **not** bypass OEM part-number or Hollander/interchange fitment verification across trim, engine, or model-year variants.
 * **Rule (`RULE-FIT-002`):** Parts flagged `LHD_ONLY` are automatically routed to **Domestic North American Channels (eBay Motors)** and blocked from being scanned onto a Trinidad LCL/FCL export pallet unless an explicit `PreOrderWishList` override exists.
 
-| Part Category (`partCategoryName`) | Default `DriveSideCompatibility` | Export Eligibility (Trinidad / Barbados) | Notes / Physics & Fitment Rationale |
+| Part Category (`partCategoryName`) | Default `SteeringSideCompatibility` | Export Eligibility (Trinidad / Barbados) | Notes / Physics & Fitment Rationale |
 | :--- | :--- | :--- | :--- |
 | **Complete Engine Assembly** | `UNIVERSAL` | **Eligible** | Long-block and manifolds cross over; check harness/ECU pins. |
 | **Transmission / Gearbox / Transaxle** | `UNIVERSAL` | **Eligible** | Direct mechanical crossover. |
@@ -65,6 +65,12 @@ All configurable parameters live in `src/core/config/pricing-policy.json` and ca
 
 ```json
 {
+  "metadata": {
+    "verificationStatus": "ESTIMATE",
+    "effectiveDate": "2026-10-21",
+    "source": "Initial Shipment #1 Baseline (Updated to BROKER_VERIFIED upon customs assessment)",
+    "approvedBy": "ARCHITECT_CFO"
+  },
   "fxRates": {
     "cadToUsdSpot": 0.73,
     "usdToTtdOfficialCustoms": 6.78297,
@@ -124,9 +130,10 @@ All configurable parameters live in `src/core/config/pricing-policy.json` and ca
    $$\text{DutyAndFees}_{\text{TTD}} = \text{CIF}_{\text{TTD}} \times (r_{\text{duty}} + r_{\text{proc}})$$
    $$\text{VAT}_{\text{TTD}} = (\text{CIF}_{\text{TTD}} + \text{DutyAndFees}_{\text{TTD}}) \times r_{\text{VAT}}$$
    $$\text{TotalTaxesAndFreight}_{\text{TTD}} = \text{DutyAndFees}_{\text{TTD}} + \text{VAT}_{\text{TTD}} + (\text{FreightAndIns}_{\text{USD}} \times \text{FX}_{\text{shadow}})$$
-3. **Minimum Vault COD Floor Price (TTD):**
+3. **Minimum Vault COD Floor Price (TTD) — Markup vs. Realized Margin Clarification:**
+   * Note: `targetExportMarkupOnCost` ($0.65$) represents a **$65\%$ markup on allocated cost** (equivalent to a $39.4\%$ gross margin on pre-tax wholesale price before unallocated yard overhead), which is distinct from realized net margin after landed taxes, FX slippage, and broker commissions.
    * Protects Canadian principal against parallel-market FX spread ($\text{FX}_{\text{shadow}}$) and holds back the broker's $10\%$ referral commission:
-   $$\text{VaultFloor}_{\text{TTD}} = \frac{\left(\text{AllocatedCost}_{\text{CAD}} \times (1 + \text{TargetMargin}_{\text{export}}) \times \text{FX}_{\text{CAD}\rightarrow\text{USD}} \times \text{FX}_{\text{shadow}}\right) + \text{TotalTaxesAndFreight}_{\text{TTD}}}{1 - r_{\text{comm}}}$$
+   $$\text{VaultFloor}_{\text{TTD}} = \frac{\left(\text{AllocatedCost}_{\text{CAD}} \times (1 + \text{TargetMarkup}_{\text{export}}) \times \text{FX}_{\text{CAD}\rightarrow\text{USD}} \times \text{FX}_{\text{shadow}}\right) + \text{TotalTaxesAndFreight}_{\text{TTD}}}{1 - r_{\text{comm}}}$$
 
 ### 4.3 Domestic Net Realization & Shop Float Reconciliation Formula
 
@@ -138,6 +145,19 @@ All configurable parameters live in `src/core/config/pricing-policy.json` and ca
 2. **Taz's Ontario Shop Float Reconciliation (`HELD_BY_TAZ_FLOAT`):**
    * Cash collected in Ontario with `cashCustodyState == 'HELD_BY_TAZ_FLOAT'` is tracked as an auditable petty-cash subledger balance that decreases when shop `Expense` receipts are logged with `paidFromCashCustody == 'HELD_BY_TAZ_FLOAT'` or when cash is deposited into the Canadian corporate bank account (`SETTLED_CANADA_BANK`):
    $$\text{RunningFloat}_{\text{CAD}} = \sum \text{CashSales}_{\text{HELD\_BY\_TAZ\_FLOAT}} - \sum \text{Expenses}_{\text{paidFromFloat}} - \sum \text{FloatBankDeposits}_{\text{CAD}}$$
+
+### 4.4 Donor Cost Reconciliation & 3-Tier Shipment Profitability
+
+1. **Donor Cost Allocation Invariant:**
+   * Across every dismantled donor `Vehicle`, the sum of allocated part cost bases plus scrap metal recovery value and any retained hull/shell value must reconcile 100% with the donor vehicle's total acquisition and dismantling cost:
+   $$\sum \text{Part.allocatedCostBasisCadMinor} + \text{ScrapRecoveryValue}_{\text{CAD}} + \text{RetainedHullValue}_{\text{CAD}} = \text{Vehicle.totalAcquisitionAndStripCost}_{\text{CAD}}$$
+2. **Tier 1 — Projected Contribution (CAD):**
+   * Estimated pre-sale margin computed from `pricing-policy.json` baseline parameters (`verificationStatus == 'ESTIMATE'`) prior to container unstuffing or sale.
+3. **Tier 2 — Realized Operating Profit (TTD & Equivalent CAD):**
+   * Completed `SaleTransaction` revenue minus actual broker-verified landed customs duties/VAT (`verificationStatus == 'BROKER_VERIFIED'`), ocean freight, drayage, and paid broker commissions. Unsold landed Vault inventory is tracked separately as working capital at landed cost rather than expensed prematurely against sold items.
+4. **Tier 3 — Repatriated Cash Return (Settled CAD):**
+   * Actual hard CAD settled in the Canadian corporate bank account via `CurrencySettlement` (`totalTargetSettledMinor` net of `fxSlippageLossCadMinor`) divided by total CAD cash deployed into the shipment:
+   $$\text{RepatriatedCashROI} = \frac{\sum \text{CurrencySettlement.totalTargetSettledCadMinor}}{\text{TotalDeployedShipmentCash}_{\text{CAD}}}$$
 
 ## 5. Part Condition Grading & Damage Code Reference
 
