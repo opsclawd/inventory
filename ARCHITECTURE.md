@@ -246,6 +246,7 @@ model User {
   salesExecuted     SaleTransaction[]   @relation("SoldByUser")
   brokeredSales     SaleTransaction[]   @relation("BrokerUser")
   verifiedSales     SaleTransaction[]   @relation("VerifiedByAdmin")
+  cycleCountTasks   CycleCountTask[]    @relation("AssignedVaultAdmin")
   wishLists         PreOrderWishList[]
   auditLogs         AuditLog[]
 }
@@ -277,9 +278,11 @@ model Vehicle {
   model                       String
   trim                        String?
   engineSpec                  String?
-  odometerKm                  Int?                       // Hours or Km for watercraft
+  odometerKm                  Int?                       // Road odometer in km
+  engineHours                 Int?                       // Watercraft / equipment operating hours
   exteriorColor               String?
   steeringSide                SteeringSideCompatibility  @default(LHD_ONLY)
+  oemFitmentVerified          Boolean                    @default(false)
   roadBrand                   RoadVehicleBrand           @default(NONE)
   operationalLane             OperationalLane
   lifecycleState              AssetLifecycleState        @default(PROPOSED_DEAL)
@@ -299,6 +302,7 @@ model Vehicle {
   wholesaleFobUsdMinor        Int?
   landedCostTtdMinor          Int?
   vaultFloorPriceTtdMinor     Int?
+  brokerMarketPriceTtdMinor   Int?                       // Expected local TT selling price quoted by broker
 
   // Compliance & Inspection Dossier (Keys pointing to R2_PRIVATE_EVIDENCE_BUCKET)
   rebuildDossierJson          Json?                      // Flexible schema for Reg. 601 photos, frame bench, estimate
@@ -326,6 +330,7 @@ model Vehicle {
   expenses                    Expense[]
   custodyHistory              CustodyEvent[]
   b2bReservations             B2BReservation[]
+  cycleCountItems             CycleCountTask[]
   shipmentId                  String?                    @db.Uuid
   shipment                    Shipment?                  @relation(fields: [shipmentId], references: [id])
   saleTransactionItem         SaleTransactionVehicleItem?
@@ -352,6 +357,7 @@ model Part {
 
   partCategoryName           String                     @default("UNCLASSIFIED")
   steeringSideCompatibility  SteeringSideCompatibility  @default(UNIVERSAL)
+  oemFitmentVerified         Boolean                    @default(false) // Mandatory destination-market OEM part# check
   isHazmatOrAirbag           Boolean                    @default(false) // Triggers UN3268 DG / recall check
   oemPartNumbers             String[]
   interchangePartNumbers     String[]
@@ -384,6 +390,7 @@ model Part {
   wholesaleFobUsdMinor       Int?
   landedCostTtdMinor         Int?
   vaultFloorPriceTtdMinor    Int?
+  brokerMarketPriceTtdMinor  Int?                       // Expected local TT selling price quoted by broker
 
   // External Marketplace Pointers & Optimistic Concurrency
   ebayOfferId                String?                    @unique
@@ -398,6 +405,7 @@ model Part {
 
   custodyHistory             CustodyEvent[]
   b2bReservations            B2BReservation[]
+  cycleCountItems            CycleCountTask[]
   saleTransactionItem        SaleTransactionPartItem?
 
   @@index([custodyState, availabilityState])
@@ -557,10 +565,11 @@ model SaleTransaction {
   domesticChannel         DomesticSaleChannel? // Populated when marketNode == ONTARIO_DOMESTIC
   exportChannel           ExportSaleChannel?   // Populated when marketNode == TRINIDAD_VAULT
 
-  taxInvoiceNumber        String?              @unique
-  buyerName               String
-  buyerPhoneE164          String?
-  buyerNationalIdHash     String?              // Required if Trinidad sale >= TT$50,000 (FIU CDD)
+  taxInvoiceNumber          String?              @unique
+  buyerName                 String
+  buyerPhoneE164            String?
+  buyerIdDocumentStorageKey String?              // Private R2 key of government ID scan/photo (Required if TT sale >= TT$50,000)
+  buyerIdNumberEncrypted    String?              // AES-256-GCM application-encrypted ID type and number for FIU audit
 
   // Actors & Separation of Duties
   soldByUserId            String               @db.Uuid
@@ -591,7 +600,7 @@ model SaleTransaction {
   brokerCommissionMinor   Int                  @default(0)
   brokerCommissionPaidAt  DateTime?
 
-  // Gate Release Lock (Required for TRINIDAD_VAULT, auto-released for ONTARIO_DOMESTIC)
+  // Gate Release Lock (Phase 1-2: stamped atomically upon payment verification; Phase 3: two-step HMAC Gate Token)
   isPaymentVerified       Boolean              @default(false)
   gateTokenNonce          String?              @unique
   gateTokenExpiresAt      DateTime?
@@ -628,6 +637,29 @@ model SaleTransactionVehicleItem {
   vehicleId         String          @unique @db.Uuid
   vehicle           Vehicle         @relation(fields: [vehicleId], references: [id])
   soldPriceMinor    Int
+}
+
+// Weekly Blind Cycle Count task for physical Trinidad Vault audit & anti-shrinkage reconciliation
+model CycleCountTask {
+  id                        String    @id @default(uuid()) @db.Uuid
+  batchCode                 String    // e.g., "CC-2026-W43"
+  partId                    String?   @db.Uuid
+  part                      Part?     @relation(fields: [partId], references: [id])
+  vehicleId                 String?   @db.Uuid
+  vehicle                   Vehicle?  @relation(fields: [vehicleId], references: [id])
+  assignedToAdminId         String    @db.Uuid
+  assignedToAdmin           User      @relation("AssignedVaultAdmin", fields: [assignedToAdminId], references: [id])
+  expectedLocationBarcode   String
+  scannedLocationBarcode    String?
+  liveVerificationPhotoKey  String?   // Timestamped photo stored in R2_PRIVATE_EVIDENCE_BUCKET
+  status                    String    @default("PENDING") // "PENDING", "VERIFIED_MATCH", "DISCREPANCY_ALERT"
+  discrepancyNotes          String?
+  dueAt                     DateTime
+  completedAt               DateTime?
+  createdAt                 DateTime  @default(now())
+
+  @@index([status, dueAt])
+  @@index([batchCode])
 }
 
 model CurrencySettlement {
@@ -752,12 +784,16 @@ ALTER TABLE "SaleTransaction" ADD CONSTRAINT ramsayville_vehicle_bill_of_sale_re
   OR ("billOfSaleStorageKey" IS NOT NULL AND length(trim("billOfSaleStorageKey")) > 0)
 );
 
--- 7. Enforce XOR target (Part vs. Vehicle) on CustodyEvent & B2BReservation
+-- 7. Enforce XOR target (Part vs. Vehicle) on CustodyEvent, B2BReservation & CycleCountTask
 ALTER TABLE "CustodyEvent" ADD CONSTRAINT custody_event_target_xor CHECK (
   ("partId" IS NOT NULL AND "vehicleId" IS NULL) OR ("partId" IS NULL AND "vehicleId" IS NOT NULL)
 );
 
 ALTER TABLE "B2BReservation" ADD CONSTRAINT b2b_reservation_target_xor CHECK (
+  ("partId" IS NOT NULL AND "vehicleId" IS NULL) OR ("partId" IS NULL AND "vehicleId" IS NOT NULL)
+);
+
+ALTER TABLE "CycleCountTask" ADD CONSTRAINT cycle_count_target_xor CHECK (
   ("partId" IS NOT NULL AND "vehicleId" IS NULL) OR ("partId" IS NULL AND "vehicleId" IS NOT NULL)
 );
 
@@ -796,7 +832,7 @@ An external HTTP request to eBay cannot run inside a PostgreSQL transaction. To 
 1. **No Silent Overwrites:** When an offline yard worker scans a part or whole asset into a container bin or onto a pallet, the PWA appends a `CustodyEvent` containing `expectedVersion` and a client UUIDv7 `idempotencyKey`.
 2. **Server Reconciliation:** Upon sync, if `version == expectedVersion`, the server updates `storageLocationId` and increments `version`. If the version has diverged (e.g., another worker moved the item or it sold online while the device was offline), the server still records the `CustodyEvent` with `hasConflict = true` and surfaces a supervisor exception rather than silently dropping or overwriting the location.
 
-### 5.3 Adaptive Checkout, Cash Custody & Trinidad Gate Token Protocol
+### 5.3 Adaptive Checkout, Cash Custody, Blind Cycle Counts & Trinidad Gate Release Protocol
 
 The unified mobile checkout workflow (`/checkout`) adapts dynamically based on the scanned item's custody location (`marketNode`):
 
@@ -807,8 +843,10 @@ The unified mobile checkout workflow (`/checkout`) adapts dynamically based on t
    * **Whole-Vehicle Lot Release & Break-Even Velocity:** Whole-vehicle retail sales (`RAMSAYVILLE_LOT_RETAIL`) enforce uploading a signed Bill of Sale (`billOfSaleStorageKey`), transition the `Vehicle` to `lifecycleState = 'SOLD_RETAIL_ONTARIO'` and `availabilityState = 'PAID_SETTLED'` (freeing 1 of the 8 Ramsayville shop lot slots), and credit `netRealizedCadMinor` (`grossCollectedMinor - platformFeeMinor - shippingCostMinor`) toward the donor VIN's Break-Even Velocity counter and the $20k Capital Buffer. Because there is no separate warehouse security gate in Ontario, `isPaymentVerified` is set to `true` and `gateReleasedAt = now()` upon receipt upload.
 2. **Trinidad Vault Mode (`marketNode == 'TRINIDAD_VAULT'`):**
    * **Strict Separation of Duties & MFA `aal2` Enforcement:** Users with `HUNTER_MECHANIC` or `OVERSEAS_B2B_BUYER` roles are hard-blocked at the API and RLS layers from mutating `SaleTransaction.isPaymentVerified` when `marketNode == 'TRINIDAD_VAULT'`. Only `TRINIDAD_VAULT_ADMIN` or `ARCHITECT_CFO` holding an active Supabase Auth JWT with Authenticator Assurance Level 2 (`aal2`) can verify payment.
-   * **Single-Use Cryptographic Gate Token:** When `TRINIDAD_VAULT_ADMIN` or `ARCHITECT_CFO` verifies full payment (`grossCollectedMinor >= sum(vaultFloorPriceTtdMinor)`), uploads payment proof to `R2_PRIVATE_EVIDENCE_BUCKET`, and satisfies the $\ge \text{TT\$50,000}$ FIU CDD ID hash check, the server sets `cashCustodyState = 'HELD_IN_TRINIDAD_VAULT'` (or `'DEPOSITED_TRINIDAD_BANK'`), updates child items to `availabilityState = 'PAID_SETTLED'`, and generates an HMAC-SHA256 token signed with a KMS secret containing `{ txId, partIds[], vehicleIds[], nonce, exp: now + 4h }`.
-   * **Atomic Gate Consumption:** Scanning the Gate QR at the Port of Spain exit door verifies the HMAC signature, checks `gateReleasedAt IS NULL`, and atomically sets `gateReleasedAt = now()`, all child parts to `custodyState = 'SOLD_AND_RELEASED'`, and whole vehicles/watercraft to `lifecycleState = 'SOLD_EXPORT_COD'`. Replay attempts fail immediately with HTTP `410 Gone`.
+   * **Encrypted FIU Customer Due Diligence (CDD) Storage:** When a single or linked transaction totals $\ge \text{TT\$50,000}$, the checkout requires uploading a private photo/scan of the buyer's government ID (`buyerIdDocumentStorageKey` in `R2_PRIVATE_EVIDENCE_BUCKET`) and storing the AES-256-GCM application-encrypted ID type and number (`buyerIdNumberEncrypted`) so records can be produced during a statutory Trinidad FIU audit.
+   * **Phased Gate Release vs. Weekly Blind Cycle Counts:**
+     * **Phase 1 & 2 (Atomic Checkout Release + Weekly Blind Cycle Counts):** While the Vault counter and exit gate are operated by the same team, verifying full payment (`grossCollectedMinor >= sum(vaultFloorPriceTtdMinor)`) and uploading payment proof atomically stamps `isPaymentVerified = true`, `gateReleasedAt = now()`, and transitions child parts to `custodyState = 'SOLD_AND_RELEASED'` (and whole assets to `lifecycleState = 'SOLD_EXPORT_COD'`). Physical shrinkage and off-book cash sales are policed via **Weekly Blind Cycle Counts (`CycleCountTask`)** (sampling up to 10 random `SHELVED_TRINIDAD_VAULT` items per week requiring a physical shelf QR scan + live timestamped photo) reconciled against TTD bank deposit slips.
+     * **Phase 3+ (Two-Step HMAC-SHA256 Gate Token):** Once dedicated exit gate guards are staffed separately from the payment desk, payment verification issues a single-use HMAC-SHA256 QR token (`gateTokenNonce`, valid for 4 hours), and scanning the token at the exit door atomically stamps `gateReleasedAt = now()` (returning HTTP `410 Gone` on replay).
 
 ## 6. Hexagonal Ports Specification (`src/core/ports/index.ts`)
 

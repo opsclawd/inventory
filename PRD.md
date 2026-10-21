@@ -4,10 +4,19 @@
 
 This Product Requirements Document (PRD) defines the functional workflows, role permissions, acceptance criteria, and phased delivery milestones for the **Cross-Border Salvage, Rebuild & Vault ERP**. 
 
-To avoid premature engineering bloat, delivery is strictly gated by operational proof:
-* **Phase 1 (Days 1–30 — Chain-of-Custody, Adaptive Checkout & Trinidad LCL Shipment #1 MVP):** Asset intake, QR tagging, append-only bin/pallet custody tracking, LHD/RHD compatibility filtering, broker-ready Commercial Invoice & Packing List export, and Unified Adaptive Checkout (`/checkout`) covering both Ontario Domestic sales (CAD + Taz's Shop Float) and Trinidad Vault Cash-on-Delivery (COD) gate release.
-* **Phase 2 (Days 31–60 — Yard Offline Resilience & CFO Subledger):** Offline-first IndexedDB Stripper PWA, "Bad Cop" Pre-Auction Deal Analyzer, receipt-enforced Expense Subledger, and QuickBooks/Xero GL sync.
-* **Phase 3 (Months 3–6 — Assistive AI Vision, Two-Phase eBay Sync & B2B Storefront):** BullMQ AI Vision OCR/grading proposals, eBay Inventory/Browse API integration with Two-Phase Export Locking (`EXPORT_LOCK_PENDING` $\rightarrow$ `EXPORT_LOCK_CONFIRMED`), and the Live Container B2B Storefront with WhatsApp notifications.
+To avoid premature engineering bloat, delivery is strictly gated by operational proof and split so software never blocks vessel departure:
+* **Phase 1A (Pre-Vessel Departure — Weekend Build):** Asset & Part QR/photo/bin intake (`FR-INT-01`, `FR-INT-02`), Expense logging with receipt photo (`FR-EXP-01`), and Broker-Ready Commercial Invoice & Packing List CSV/PDF export (`FR-LOG-01`, `FR-LOG-02`). *(Automated CERS fixed-width `.txt` generation is deferred to the licensed customs broker for Shipment #1).*
+* **Phase 1B (During 14-Day Ocean Transit):** Trinidad Vault check-in (`FR-VLT-01`), Landed Cost allocation (`FR-VLT-02`), and Adaptive Mobile Checkout (`FR-CHK-01` / `FR-VLT-03`) covering both Ontario Domestic sales (CAD + Taz's Shop Float) and Trinidad Vault Cash-on-Delivery (COD) release.
+* **Phase 2 (Days 31–60 — Yard Offline Resilience, Blind Cycle Counts & CFO Subledger):** Offline-first IndexedDB Stripper PWA, Weekly Blind Cycle Counts (`FR-VLT-05`), "Bad Cop" Pre-Auction Deal Analyzer, receipt-enforced Expense Subledger, and QuickBooks/Xero GL sync.
+* **Phase 3 (Months 3–6 — Assistive AI Vision, Two-Phase eBay Sync, Two-Step Gate Token & B2B Storefront):** BullMQ AI Vision OCR/grading proposals, eBay Inventory/Browse API integration with Two-Phase Export Locking (`EXPORT_LOCK_PENDING` $\rightarrow$ `EXPORT_LOCK_CONFIRMED`), Two-Step HMAC Gate Token exit scanning, and the Live Container B2B Storefront with WhatsApp notifications.
+
+### 1.1 Phase 1 Operational Proof Gate (Pass/Fail Criteria to Unlock Phase 2)
+
+Engineering work on Phase 2 and Phase 3 is strictly gated on Shipment #1 clearing the following four operational thresholds:
+1. **Landed Cost Accuracy:** Actual Port of Spain customs duty, VAT, and drayage land within $\pm 15\%$ of the `DOMAIN-RULES.md` model.
+2. **Market Price Validation:** At least $60\%$ of Shipment #1 items have a verified local Trinidad market price (`brokerMarketPriceTtdMinor`) equal to or greater than their computed `vaultFloorPriceTtdMinor`.
+3. **90-Day Sell-Through & Cash Recovery:** At least $50\%$ of Shipment #1 landed value is sold and collected in verified COD funds within 60 days of vault check-in, and at least one $\text{TTD} \rightarrow \text{CAD}$ repatriation batch clears into the Canadian corporate bank account with total effective FX + wire slippage $\le 12\%$ over official CBTT spot.
+4. **Kill / Pivot Rule:** If any SKU class (e.g., specific Korean SUV body panels or watercraft) fails to clear `vaultFloorPriceTtdMinor` due to Japanese RHD import competition or customs tariff friction, freeze Ontario acquisitions for that category before starting Phase 2.
 
 ---
 
@@ -27,8 +36,9 @@ Authentication is enforced via Supabase Auth with Row-Level Security (RLS) and A
 | **FR-CHK-01:** Execute Ontario Domestic Checkout (CAD Walk-In / FB / Kijiji / Lot) | CRUD | Execute (CAD Only) | No Access | No Access | No Access |
 | **FR-VLT-01:** Check-In Landed Shipment to Vault | CRUD | Read Status | No Access | Execute Check-In | No Access |
 | **FR-VLT-02:** Create 24h B2B Part/Vehicle Reservation | CRUD | Create (Broker) | No Access | CRUD | Create (Rate-Limited) |
-| **FR-VLT-03:** Verify Trinidad Vault COD Payment & Issue Gate Token | Execute (MFA aal2 Required) | **Denied (Hard Lock)** | No Access | **Execute (MFA aal2 Required)** | No Access |
+| **FR-VLT-03:** Verify Trinidad Vault COD Payment & Release | Execute (MFA aal2 Required) | **Denied (Hard Lock)** | No Access | **Execute (MFA aal2 Required)** | No Access |
 | **FR-VLT-04:** Log Broker Commission & FX Batch | CRUD + Reconcile | Read Own Leads | No Access | Create / Execute | Read Own Commission |
+| **FR-VLT-05:** Execute Weekly Blind Cycle Count | CRUD + Trigger + Audit | No Access | No Access | Execute Count | No Access |
 
 ---
 
@@ -65,16 +75,17 @@ Phase 1 is engineered around the immediate proof-of-concept shipment to Port of 
 #### FR-LOG-01: LCL Pallet & Whole-Asset Consolidation Scan
 * **Description:** Operators shall create an outbound `Shipment` (e.g., `EXP-2026-TT-001`) and `ShipmentPallet` (`PLT-2026-001`) and scan parts onto the pallet via mobile camera or Bluetooth 2D barcode scanner.
 * **Business Rules:**
-  1. **LHD-to-RHD Destination Guard:** If `Shipment.destinationPort == 'TT_POS'` (or any RHD market) and a worker scans a part marked `steeringSideCompatibility == 'LHD_ONLY'`, the system blocks the scan with a warning modal: *"LHD-ONLY PART BLOCKED: Trinidad is a Right-Hand-Drive market. Confirm explicit buyer override to pack."*
-  2. **Two-Phase Marketplace Lock (Phase 1 Manual Fallback & Phase 3 API Sync):** If a scanned part is currently active on eBay (`ebaySyncState == 'SYNDICATED_LIVE'`), scanning it onto a pallet transitions `custodyState` to `ON_EXPORT_PALLET` and `ebaySyncState` to `EXPORT_LOCK_PENDING`. In **Phase 1** (prior to Phase 3 automated eBay API integration), transitioning from `EXPORT_LOCK_PENDING` to `EXPORT_LOCK_CONFIRMED` requires an explicit supervisor manual verification action confirming the eBay listing was ended/zeroed (logging the actor and timestamp in `AuditLog`). In **Phase 3+**, an `OutboxEvent` triggers the BullMQ worker to zero out eBay quantity automatically and reconciles against any late-arriving eBay order webhooks. The pallet cannot be sealed (`sealedAt`) until all child parts reach `EXPORT_LOCK_CONFIRMED` (or `NOT_LISTED`).
-  3. **Environmental Prep Check:** A whole vehicle, watercraft, or drivetrain assembly cannot be sealed onto a shipment until `fluidsDrainedAt` is timestamped (and `steamCleanedReceiptKey` is uploaded for whole vehicles/watercraft).
+  1. **LHD-to-RHD Destination & OEM Fitment Guard:** If `Shipment.destinationPort == 'TT_POS'` (or any RHD market) and a worker scans a part marked `steeringSideCompatibility == 'LHD_ONLY'`, the system blocks the scan with a warning modal: *"LHD-ONLY PART BLOCKED: Trinidad is a Right-Hand-Drive market. Confirm explicit buyer override to pack."* Additionally, parts must have `oemFitmentVerified == true` prior to export packing.
+  2. **Floor-Exceeds-Market Guard (`RULE-PRC-001`):** If an item's computed `vaultFloorPriceTtdMinor > brokerMarketPriceTtdMinor`, the system flags a high-visibility `MARGIN_INVERSION_WARNING` blocking export packing unless explicitly overridden by `ARCHITECT_CFO`.
+  3. **Two-Phase Marketplace Lock (Phase 1 Manual Fallback & Phase 3 API Sync):** If a scanned part is currently active on eBay (`ebaySyncState == 'SYNDICATED_LIVE'`), scanning it onto a pallet transitions `custodyState` to `ON_EXPORT_PALLET` and `ebaySyncState` to `EXPORT_LOCK_PENDING`. In **Phase 1** (prior to Phase 3 automated eBay API integration), transitioning from `EXPORT_LOCK_PENDING` to `EXPORT_LOCK_CONFIRMED` requires an explicit supervisor manual verification action confirming the eBay listing was ended/zeroed (logging the actor and timestamp in `AuditLog`). In **Phase 3+**, an `OutboxEvent` triggers the BullMQ worker to zero out eBay quantity automatically and reconciles against any late-arriving eBay order webhooks. The pallet cannot be sealed (`sealedAt`) until all child parts reach `EXPORT_LOCK_CONFIRMED` (or `NOT_LISTED`).
+  4. **Environmental Prep Check:** A whole vehicle, watercraft, or drivetrain assembly cannot be sealed onto a shipment until `fluidsDrainedAt` is timestamped (and `steamCleanedReceiptKey` is uploaded for whole vehicles/watercraft).
 
 #### FR-LOG-02: Broker-Ready Export & Customs Package Generator
-* **Description:** Instead of attempting direct unverified customs EDI on Shipment #1, the system shall compile a deterministic, human-and-broker-verifiable **Export Compliance Dossier (PDF + CSV + CERS Fixed-Width `.txt`)** from the scanned shipment contents.
+* **Description:** Instead of attempting direct unverified customs EDI on Shipment #1, the system shall compile a deterministic, human-and-broker-verifiable **Export Compliance Dossier (PDF + CSV)** from the scanned shipment contents in **Phase 1A** (deferring automated CERS fixed-width `.txt` generation to the licensed customs broker for Shipment #1).
 * **Outputs Generated:**
-  1. **Commercial Invoice (PDF & CSV):** Groups parts by 6-digit HS Tariff Code (`8708.xx` for auto parts, `8407.xx` for engines, `8903.99` for Yamaha watercraft, `8479.89` for the A/C machine), displaying Importer of Record details, item descriptions, donor VIN/HIN provenance, declared Wholesale FOB USD values, freight, insurance, and total CIF USD value.
+  1. **Commercial Invoice (PDF & CSV):** Groups parts by 6-digit HS Tariff Code (`8708.xx` for auto parts, `8407.xx` for engines, `8903.99` for Yamaha watercraft, `8479.89` for the A/C machine), displaying Importer of Record details, item descriptions, donor VIN/HIN provenance, declared arm's-length Wholesale FOB USD values (`RULE-CUST-003`), freight, insurance, and total CIF USD value.
   2. **Detailed Packing List (PDF & CSV):** Lists each `PLT-XXXXXX` pallet and whole unit, itemizing net weight ($\text{kg}$), crating tare weight ($22.0\text{ kg}$ default per ISPM-15 pallet), gross weight, and dimensions ($\text{L} \times \text{W} \times \text{H cm}$) for the freight forwarder's Ocean Bill of Lading.
-  3. **CBSA CERS Bulk Upload Draft (`.txt`) & 48-Hour Marine Countdown:** Generates a fixed-length `.txt` draft conforming to CBSA CERS bulk-load specifications, tracks the mandatory 48-hour prior-to-vessel-loading deadline on the dashboard, and archives the final Proof of Report (POR) and export dossier into Canadian-resident storage for 6 years.
+  3. **CBSA CERS 48-Hour Marine Countdown & 6-Year Archive:** Tracks the mandatory 48-hour prior-to-vessel-loading CERS deadline on the dashboard and archives the licensed customs broker's final Proof of Report (POR) and export dossier into Canadian-resident storage for 6 years (automated CERS `.txt` bulk-load draft generation unlocks after Shipment #1).
 
 ---
 
@@ -104,15 +115,14 @@ Phase 1 is engineered around the immediate proof-of-concept shipment to Port of 
 * **Business Rules:**
   * All tariff rates, VAT percentages ($12.5\%$), broker commission rates ($5\%\text{–}10\%$), and shadow FX reserve rates are read from the versioned configuration register (`DOMAIN-RULES.md`), never hardcoded in business logic.
 
-#### FR-VLT-03: Strict COD Verification & Single-Use Gate Token
+#### FR-VLT-03: Strict COD Verification & Phased Gate Release
 * **Description:** When a buyer or commissioned broker arrives at the Port of Spain Vault to purchase parts or watercraft, the system enforces a hard separation between sales selection and payment verification.
 * **Business Rules:**
   1. Only `TRINIDAD_VAULT_ADMIN` or `ARCHITECT_CFO` with an active MFA-verified JWT session (`aal2`) can execute `verifyCodPayment`.
   2. The mutation rejects any payment where `grossCollectedMinor < sum(vaultFloorPriceTtdMinor)` unless an explicit CFO discount override is signed.
   3. The admin must upload a payment proof photo (cash count or verified bank wire receipt) to `R2_PRIVATE_EVIDENCE_BUCKET`.
-  4. **Trinidad FIU / CDD Compliance Gate:** If a single transaction or linked buyer transactions total $\ge \text{TT\$50,000}$ (e.g., selling the Yamaha Jet or VR watercraft), the UI enforces capturing the buyer's verified government ID reference (`buyerNationalIdHash`) prior to payment completion.
-  5. Upon verification, the system marks the broker's commission as payable, sets item `availabilityState = 'PAID_SETTLED'`, and generates a **Single-Use HMAC-SHA256 Gate Release QR Token** (`gateTokenNonce`, valid for 4 hours).
-  6. Scanning the Gate Token at the warehouse exit atomically sets `gateReleasedAt = now()` and transitions child parts to `custodyState = 'SOLD_AND_RELEASED'` (and whole assets to `lifecycleState = 'SOLD_EXPORT_COD'`). A second scan of the same token returns HTTP `410 Gone` ("GATE PASS ALREADY CONSUMED").
+  4. **Trinidad FIU / CDD Compliance Gate (Encrypted Private ID Storage):** If a single transaction or linked buyer transactions total $\ge \text{TT\$50,000}$ (e.g., selling the Yamaha Jet or VR watercraft), the UI enforces uploading a photo/scan of the buyer's government ID (`buyerIdDocumentStorageKey` in `R2_PRIVATE_EVIDENCE_BUCKET`) and capturing the AES-256-GCM application-encrypted ID type and number (`buyerIdNumberEncrypted`) so records can be produced during a statutory FIU audit.
+  5. **Phase 1 & 2 Atomic Release vs. Phase 3 Two-Step Gate Token:** In **Phase 1 and 2**, upon payment verification, the system marks the broker's commission as payable, sets item `availabilityState = 'PAID_SETTLED'`, and atomically stamps `gateReleasedAt = now()`, transitioning child parts to `custodyState = 'SOLD_AND_RELEASED'` (and whole assets to `lifecycleState = 'SOLD_EXPORT_COD'`). In **Phase 3** (when dedicated exit guards operate separately from counter staff), verification issues a **Single-Use HMAC-SHA256 Gate Release QR Token** (`gateTokenNonce`, valid for 4 hours) consumed at the warehouse exit (returning HTTP `410 Gone` on replay).
 
 #### FR-VLT-04: Commercial Bank Cap & FX Repatriation Batch Ledger
 * **Description:** Tracks TTD cash deposited into Trinidadian commercial banks and logs conversion batches (`CurrencySettlement`) back into CAD/USD.
@@ -122,7 +132,15 @@ Phase 1 is engineered around the immediate proof-of-concept shipment to Port of 
 
 ---
 
-## 4. Phase 2 Functional Requirements (Offline PWA & CFO Subledger)
+## 4. Phase 2 Functional Requirements (Offline PWA, Blind Cycle Counts & CFO Subledger)
+
+### Module E (Phase 2 Extension): Vault Anti-Shrinkage & Deposit Reconciliation (`src/modules/logistics-vault`)
+
+#### FR-VLT-05: Weekly Blind Cycle Counts & Bank Deposit Reconciliation
+* **Description:** Replaces single-operator gate-token theatre with physical inventory verification. Once per week (or triggered on demand by `ARCHITECT_CFO`), the system generates a `CycleCountTask` batch selecting up to 10 random `SHELVED_TRINIDAD_VAULT` parts/vehicles without revealing the expected shelf bin prior to arrival.
+* **Acceptance Criteria:**
+  * `TRINIDAD_VAULT_ADMIN` must scan the physical QR code on the shelf (`scannedLocationBarcode`) and capture a live timestamped photo (`liveVerificationPhotoKey` in `R2_PRIVATE_EVIDENCE_BUCKET`).
+  * Any missing or unverified item transitions the task to `DISCREPANCY_ALERT` on the CFO Dashboard and cross-checks physical Vault stock against recorded `SaleTransaction` rows and TTD bank deposit slips.
 
 ### Module F: "Bad Cop" CFO Deal Analyzer & Expense Subledger (`src/modules/cfo-subledger`)
 
@@ -160,7 +178,7 @@ Phase 1 is engineered around the immediate proof-of-concept shipment to Port of 
 
 ## 6. Non-Functional Requirements (NFRs) & Quality Gates
 
-* **NFR-SEC-01 (Storage Isolation):** `R2_PRIVATE_EVIDENCE_BUCKET` shall block all public access. Receipts, UVIPs, bank deposit slips, and customer ID hashes may only be accessed via server-generated pre-signed URLs with a maximum TTL of 15 minutes, logged in `AuditLog`.
+* **NFR-SEC-01 (Storage Isolation):** `R2_PRIVATE_EVIDENCE_BUCKET` shall block all public access. Receipts, UVIPs, bank deposit slips, and encrypted customer government ID documents (`buyerIdDocumentStorageKey`) may only be accessed via server-generated pre-signed URLs with a maximum TTL of 15 minutes, logged in `AuditLog`.
 * **NFR-REL-01 (Offline Queue Durability):** The Yard PWA shall queue binary photo blobs and `CustodyEvent` mutations in IndexedDB (`Dexie.js`), display a persistent high-contrast badge showing the count of unsynced items, and block user logout or cache clearing while unsynced mutations exist.
 * **NFR-IDEM-01 (End-to-End Idempotency):** Every barcode scan, offline batch sync, eBay webhook, and WhatsApp webhook must supply a deterministic `Idempotency-Key` enforced by PostgreSQL unique constraints so network retries or double-taps never duplicate records.
 * **NFR-ACC-01 (Gloved & Outdoor Usability):** All mobile scanner and Vault POS screens must conform to WCAG 2.2 AA contrast ratios ($> 4.5:1$), use minimum $56 \times 56\text{ px}$ touch targets for gloved operation, and pair every color indicator (red/green) with distinct text, icon, and audio/haptic cues.

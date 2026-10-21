@@ -13,12 +13,12 @@ To prevent regulatory or market changes from requiring code deployments, the sys
 
 **Context:** Donor vehicles acquired in Ontario are Left-Hand Drive (`LHD_ONLY`), whereas Trinidad & Tobago and Barbados operate predominantly Right-Hand Drive (`RHD_ONLY`) fleets (alongside universal marine watercraft).
 
-* **Rule (`RULE-FIT-001`):** Any stripped automotive part must be assigned a `SteeringSideCompatibility` enum (`UNIVERSAL`, `LHD_ONLY`, `RHD_ONLY`) based on its `partCategoryName` default below, unless explicitly overridden by a human reviewer or matched to a verified LHD Caribbean buyer wish-list. **Important Fitment Clarification:** `UNIVERSAL` indicates **steering-side geometry neutrality only** (i.e., the part is not physically mirrored between LHD and RHD cockpits/firewalls); it does **not** bypass OEM part-number or Hollander/interchange fitment verification across trim, engine, or model-year variants.
+* **Rule (`RULE-FIT-001`):** Any stripped automotive part must be assigned a `SteeringSideCompatibility` enum (`UNIVERSAL`, `LHD_ONLY`, `RHD_ONLY`) based on its `partCategoryName` default below, unless explicitly overridden by a human reviewer or matched to a verified LHD Caribbean buyer wish-list. **Important Fitment Clarification:** `UNIVERSAL` indicates **steering-side geometry neutrality only** (i.e., the part is not physically mirrored between LHD and RHD cockpits/firewalls); it **never** replaces mandatory OEM part-number or Hollander/interchange fitment verification (`oemFitmentVerified = true`) against destination-market vehicles across trim, engine, or model-year variants.
 * **Rule (`RULE-FIT-002`):** Parts flagged `LHD_ONLY` are automatically routed to **Domestic North American Channels (eBay Motors)** and blocked from being scanned onto a Trinidad LCL/FCL export pallet unless an explicit `PreOrderWishList` override exists.
 
 | Part Category (`partCategoryName`) | Default `SteeringSideCompatibility` | Export Eligibility (Trinidad / Barbados) | Notes / Physics & Fitment Rationale |
 | :--- | :--- | :--- | :--- |
-| **Complete Engine Assembly** | `UNIVERSAL` | **Eligible** | Long-block and manifolds cross over; check harness/ECU pins. |
+| **Complete Engine Assembly** | `UNIVERSAL` | **Eligible** | Long-block and manifolds cross over; check harness/ECU pins (`oemFitmentVerified = true`). |
 | **Transmission / Gearbox / Transaxle** | `UNIVERSAL` | **Eligible** | Direct mechanical crossover. |
 | **Front Bumpers, Hoods, Fenders, Grilles** | `UNIVERSAL` | **Eligible** | High-velocity collision sheet metal for 2021–2022 Kia/Hyundai/Mazda. |
 | **Complete Doors (Shell, Glass, Latch)** | `UNIVERSAL` | **Eligible (Shell)** | Physical door shells & glass are symmetric; **Note:** Master window switch bezel is LHD/RHD specific. |
@@ -31,6 +31,7 @@ To prevent regulatory or market changes from requiring code deployments, the sys
 | **Front Headlamps (Halogen / LED Projector)** | `LHD_ONLY` | **Restricted (Warn)** | Beam cutoff pattern is angled for right-hand traffic (LHT vs RHT); export only if buyer explicitly accepts LHD beam pattern. |
 | **Windshield Wiper Linkage, Cowl & Motor** | `LHD_ONLY` | **Blocked (eBay Only)** | Sweep geometry and pivot mounts are mirrored for LHD driver visibility. |
 | **Brake Booster, Master Cylinder & Pedal Box** | `LHD_ONLY` | **Blocked (eBay Only)** | Firewall mounting and brake line routing are side-specific. |
+| **Wiring Harnesses & Cabin/Dash Looms** | `LHD_ONLY` | **Blocked (eBay Only)** | Loom lengths, fuse-box breakouts, and firewall grommets are routed specifically for LHD cockpits. |
 
 ---
 
@@ -38,6 +39,7 @@ To prevent regulatory or market changes from requiring code deployments, the sys
 
 **Rule (`RULE-CUST-001`):** AI-suggested HS codes (`Part.suggestedHsCode`) are **assistive proposals only**. For commercial customs filing, the licensed customs broker confirms `Part.brokerVerifiedHsCode`.
 **Rule (`RULE-CUST-002`):** CBSA CERS export declarations are mandatory for commercial goods valued $\ge \text{CAD } \$2,000$ destined outside the US, and **mandatory for all permanently exported conveyances (vehicles and watercraft) regardless of dollar value**, submitted $\ge 48\text{ hours}$ prior to marine vessel loading.
+**Rule (`RULE-CUST-003` — Arm's-Length FOB Transfer Pricing):** Declared Wholesale FOB USD values (`wholesaleFobUsdMinor`) on the Commercial Invoice must reflect defensible arm's-length wholesale cost-plus transfer pricing derived from documented Canadian acquisition receipts (`Expense.receiptStorageKey`) plus pro-rata dismantling cost allocation, never arbitrary under-invoicing.
 
 | Asset / Part Category | Default HS Subheading | Default Trinidad CET Duty Rate (Configurable) | Trinidad VAT Rate (Compounded) | Mandatory Environmental & Hazmat Gate |
 | :--- | :--- | :--- | :--- | :--- |
@@ -77,6 +79,7 @@ All configurable parameters live in `src/core/config/pricing-policy.json` and ca
     "usdToTtdShadowRepatriation": 7.35
   },
   "trinidadImportTax": {
+    "isTrinidadEntityVatRegistered": false,
     "defaultAutoPartsDutyRate": 0.30,
     "customsProcessingFeeRate": 0.03,
     "vatRate": 0.125
@@ -120,7 +123,7 @@ All configurable parameters live in `src/core/config/pricing-policy.json` and ca
 }
 ```
 
-### 4.2 Landed Cost & Trinidad Vault COD Floor Formula
+### 4.2 Landed Cost & Trinidad Vault COD Floor Formula (Branching on VAT Registration)
 
 1. **CIF Valuation (USD):**
    $$\text{CIF}_{\text{USD}} = \text{FOB}_{\text{USD}} + (\text{Weight}_{\text{kg}} \times C_{\text{freight\_per\_kg}}) + (\text{FOB}_{\text{USD}} \times r_{\text{ins}})$$
@@ -129,7 +132,11 @@ All configurable parameters live in `src/core/config/pricing-policy.json` and ca
    $$\text{CIF}_{\text{TTD}} = \text{CIF}_{\text{USD}} \times \text{FX}_{\text{official}}$$
    $$\text{DutyAndFees}_{\text{TTD}} = \text{CIF}_{\text{TTD}} \times (r_{\text{duty}} + r_{\text{proc}})$$
    $$\text{VAT}_{\text{TTD}} = (\text{CIF}_{\text{TTD}} + \text{DutyAndFees}_{\text{TTD}}) \times r_{\text{VAT}}$$
-   $$\text{TotalTaxesAndFreight}_{\text{TTD}} = \text{DutyAndFees}_{\text{TTD}} + \text{VAT}_{\text{TTD}} + (\text{FreightAndIns}_{\text{USD}} \times \text{FX}_{\text{shadow}})$$
+   * **Non-Recoverable vs. Recoverable Import VAT (`isTrinidadEntityVatRegistered`):**
+     * **When `isTrinidadEntityVatRegistered == false` (Phase 1 Default):** The $12.5\%$ import VAT paid at customs (`VAT_TTD`) is non-recoverable and **IS included** in $\text{TotalTaxesAndFreight}_{\text{TTD}}$ inside the floor price numerator, while checkout `taxOrVatMinor` is forced to `0` and `taxInvoiceNumber` is omitted:
+       $$\text{TotalTaxesAndFreight}_{\text{TTD}} = \text{DutyAndFees}_{\text{TTD}} + \text{VAT}_{\text{TTD}} + (\text{FreightAndIns}_{\text{USD}} \times \text{FX}_{\text{shadow}})$$
+     * **When `isTrinidadEntityVatRegistered == true`:** The $12.5\%$ import VAT paid at customs is a recoverable Input Tax Credit and is **EXCLUDED** from $\text{TotalTaxesAndFreight}_{\text{TTD}}$ in the floor price numerator; instead, $12.5\%$ output VAT is added on top of the sale price at checkout (`taxOrVatMinor`) with a mandatory `taxInvoiceNumber`:
+       $$\text{TotalTaxesAndFreight}_{\text{TTD}} = \text{DutyAndFees}_{\text{TTD}} + (\text{FreightAndIns}_{\text{USD}} \times \text{FX}_{\text{shadow}})$$
 3. **Minimum Vault COD Floor Price (TTD) — Markup vs. Realized Margin Clarification:**
    * Note: `targetExportMarkupOnCost` ($0.65$) represents a **$65\%$ markup on allocated cost** (equivalent to a $39.4\%$ gross margin on pre-tax wholesale price before unallocated yard overhead), which is distinct from realized net margin after landed taxes, FX slippage, and broker commissions.
    * Protects Canadian principal against parallel-market FX spread ($\text{FX}_{\text{shadow}}$) and holds back the broker's $10\%$ referral commission:
@@ -146,16 +153,20 @@ All configurable parameters live in `src/core/config/pricing-policy.json` and ca
    * Cash collected in Ontario with `cashCustodyState == 'HELD_BY_TAZ_FLOAT'` is tracked as an auditable petty-cash subledger balance that decreases when shop `Expense` receipts are logged with `paidFromCashCustody == 'HELD_BY_TAZ_FLOAT'` or when cash is deposited into the Canadian corporate bank account (`SETTLED_CANADA_BANK`):
    $$\text{RunningFloat}_{\text{CAD}} = \sum \text{CashSales}_{\text{HELD\_BY\_TAZ\_FLOAT}} - \sum \text{Expenses}_{\text{paidFromFloat}} - \sum \text{FloatBankDeposits}_{\text{CAD}}$$
 
-### 4.4 Donor Cost Reconciliation & 3-Tier Shipment Profitability
+### 4.4 Pro-Rata Donor Cost Allocation, Market Price Guard & 3-Tier Shipment Profitability
 
-1. **Donor Cost Allocation Invariant:**
+1. **Pro-Rata Value-Weighted Donor Cost Allocation Formula & Invariant:**
+   * Each stripped part's `allocatedCostBasisCadMinor` is computed pro-rata by its estimated market value share of the donor vehicle's net acquisition and strip cost:
+   $$\text{AllocatedCost}_{\text{Part}} = \left(\text{DonorBuyPrice} + \text{BuyerFees} + \text{Tow} + \text{StripLabor} - \text{ScrapShellRecovery}\right) \times \frac{\text{PartEstimatedMarketValueCAD}}{\sum_{i=1}^{n} \text{PartEstimatedMarketValueCAD}_i}$$
    * Across every dismantled donor `Vehicle`, the sum of allocated part cost bases plus scrap metal recovery value and any retained hull/shell value must reconcile 100% with the donor vehicle's total acquisition and dismantling cost:
    $$\sum \text{Part.allocatedCostBasisCadMinor} + \text{ScrapRecoveryValue}_{\text{CAD}} + \text{RetainedHullValue}_{\text{CAD}} = \text{Vehicle.totalAcquisitionAndStripCost}_{\text{CAD}}$$
-2. **Tier 1 — Projected Contribution (CAD):**
+2. **Rule `RULE-PRC-001` (Floor-Exceeds-Market Guard):**
+   * During pre-auction Deal Analysis and pre-shipment Pallet Scanning, if an item's computed `vaultFloorPriceTtdMinor > brokerMarketPriceTtdMinor`, the system flags a high-visibility `MARGIN_INVERSION_WARNING` blocking export packing unless explicitly overridden by `ARCHITECT_CFO`.
+3. **Tier 1 — Projected Contribution (CAD):**
    * Estimated pre-sale margin computed from `pricing-policy.json` baseline parameters (`verificationStatus == 'ESTIMATE'`) prior to container unstuffing or sale.
-3. **Tier 2 — Realized Operating Profit (TTD & Equivalent CAD):**
+4. **Tier 2 — Realized Operating Profit (TTD & Equivalent CAD):**
    * Completed `SaleTransaction` revenue minus actual broker-verified landed customs duties/VAT (`verificationStatus == 'BROKER_VERIFIED'`), ocean freight, drayage, and paid broker commissions. Unsold landed Vault inventory is tracked separately as working capital at landed cost rather than expensed prematurely against sold items.
-4. **Tier 3 — Repatriated Cash Return (Settled CAD):**
+5. **Tier 3 — Repatriated Cash Return (Settled CAD):**
    * Actual hard CAD settled in the Canadian corporate bank account via `CurrencySettlement` (`totalTargetSettledMinor` net of `fxSlippageLossCadMinor`) divided by total CAD cash deployed into the shipment:
    $$\text{RepatriatedCashROI} = \frac{\sum \text{CurrencySettlement.totalTargetSettledCadMinor}}{\text{TotalDeployedShipmentCash}_{\text{CAD}}}$$
 
@@ -163,11 +174,16 @@ All configurable parameters live in `src/core/config/pricing-policy.json` and ca
 
 ### 5.1 Mechanical Components (Engines, Transmissions, Axles, Marine Powertrains)
 
-* **`GRADE_A`:** Donor odometer $< 96,560\text{ km}$ ($60,000\text{ miles}$), OR annual average $< 24,140\text{ km/year}$ ($15,000\text{ miles/year}$).
-* **`GRADE_B1`:** $96,560\text{–}321,868\text{ km}$; function-tested prior to strip and ready for bolt-on installation.
-* **`GRADE_B2`:** $96,560\text{–}321,868\text{ km}$; minor external cosmetic wear/corrosion, mechanically sound.
-* **`GRADE_B3`:** Requires minor accessory/seal repair ($< 1\text{ hour}$ labor); zero internal or structural damage.
-* **`GRADE_C`:** Operational mechanical assembly with $\ge 321,868\text{ km}$ ($200,000\text{ miles}$).
+* **Automotive / Road Vehicles (`odometerKm`):**
+  * **`GRADE_A`:** Donor odometer $< 96,560\text{ km}$ ($60,000\text{ miles}$), OR annual average $< 24,140\text{ km/year}$ ($15,000\text{ miles/year}$).
+  * **`GRADE_B1`:** $96,560\text{–}321,868\text{ km}$; function-tested prior to strip and ready for bolt-on installation.
+  * **`GRADE_B2`:** $96,560\text{–}321,868\text{ km}$; minor external cosmetic wear/corrosion, mechanically sound.
+  * **`GRADE_B3`:** Requires minor accessory/seal repair ($< 1\text{ hour}$ labor); zero internal or structural damage.
+  * **`GRADE_C`:** Operational mechanical assembly with $\ge 321,868\text{ km}$ ($200,000\text{ miles}$).
+* **Watercraft / Marine Powertrains (`engineHours`):**
+  * **`GRADE_A`:** $< 150\text{ engine hours}$; compression-tested and fresh-water flushed.
+  * **`GRADE_B1` / `GRADE_B2`:** $150\text{–}400\text{ engine hours}$; mechanically sound (`GRADE_B1` ready for turnkey drop-in; `GRADE_B2` minor external cosmetic/salt wear).
+  * **`GRADE_C`:** $> 400\text{ engine hours}$; operational high-hour marine assembly or rebuildable core.
 
 ### 5.2 Body Panels & Sheet Metal (3-Character Damage Code: `[Loc][Type][Units]`)
 
@@ -190,6 +206,6 @@ Stored in `Vehicle.rebuildDossierJson` with private file keys in `R2_PRIVATE_EVI
 
 ### 6.2 Trinidad & Tobago FIU & Customs Clearance Checklist
 
-1. **Customer Due Diligence (CDD) Gate:** Any single or linked `SaleTransaction` (`marketNode == 'TRINIDAD_VAULT'`) where `grossCollectedMinor >= 5000000` ($\text{TT\$50,000}$) requires capturing the buyer's government ID reference (`buyerNationalIdHash`) and full name before `isPaymentVerified` can be set to `true`.
+1. **Customer Due Diligence (CDD) Gate (Encrypted Private ID Storage):** Any single or linked `SaleTransaction` (`marketNode == 'TRINIDAD_VAULT'`) where `grossCollectedMinor >= 5000000` ($\text{TT\$50,000}$) requires uploading a private scan/photo of the buyer's government ID (`buyerIdDocumentStorageKey` in `R2_PRIVATE_EVIDENCE_BUCKET`), storing the AES-256-GCM application-encrypted ID type and number (`buyerIdNumberEncrypted`), and recording the buyer's full name before `isPaymentVerified` can be set to `true` (ensuring auditability upon statutory FIU inspection).
 2. **Large Cash Transaction Alert:** Any cash transaction $\ge \text{TT\$90,000}$ triggers a mandatory FIU compliance notice to the Trinidad Vault Admin and Architect/CFO.
 
