@@ -86,6 +86,15 @@ All configurable parameters live in `src/core/config/pricing-policy.json` and ca
     "minRebuildNetProfitCadMinor": 700000,
     "minPartOutRoiMultiplier": 2.0
   },
+  "domesticChannelFees": {
+    "OTTAWA_WALK_IN_CASH": 0.0,
+    "FB_MARKETPLACE_LOCAL": 0.0,
+    "KIJIJI_LOCAL": 0.0,
+    "RAMSAYVILLE_LOT_RETAIL": 0.0,
+    "WHOLESALE_MECHANIC_NETWORK": 0.0,
+    "EBAY_MOTORS_SHIPPED": 0.1325,
+    "CAR_PART_WHOLESALE": 0.0
+  },
   "araGradeMultipliers": {
     "GRADE_A": 1.05,
     "GRADE_B1": 1.00,
@@ -119,6 +128,17 @@ All configurable parameters live in `src/core/config/pricing-policy.json` and ca
    * Protects Canadian principal against parallel-market FX spread ($\text{FX}_{\text{shadow}}$) and holds back the broker's $10\%$ referral commission:
    $$\text{VaultFloor}_{\text{TTD}} = \frac{\left(\text{AllocatedCost}_{\text{CAD}} \times (1 + \text{TargetMargin}_{\text{export}}) \times \text{FX}_{\text{CAD}\rightarrow\text{USD}} \times \text{FX}_{\text{shadow}}\right) + \text{TotalTaxesAndFreight}_{\text{TTD}}}{1 - r_{\text{comm}}}$$
 
+### 4.3 Domestic Net Realization & Shop Float Reconciliation Formula
+
+1. **Domestic Channel Fee & Net Realization (`netRealizedCadMinor`):**
+   * Local Ontario cash/e-Transfer channels (`OTTAWA_WALK_IN_CASH`, `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL`, `RAMSAYVILLE_LOT_RETAIL`, `WHOLESALE_MECHANIC_NETWORK`) incur $0\%$ platform fees ($r_{\text{channel\_fee}} = 0.0$), whereas `EBAY_MOTORS_SHIPPED` deducts $13.25\%$ ($r_{\text{channel\_fee}} = 0.1325$) plus outbound courier label costs:
+   $$\text{PlatformFee}_{\text{CAD}} = \text{round}\left(\text{Subtotal}_{\text{CAD}} \times r_{\text{channel\_fee}}\right)$$
+   $$\text{NetRealized}_{\text{CAD}} = \text{GrossCollected}_{\text{CAD}} - \text{PlatformFee}_{\text{CAD}} - \text{ShippingCost}_{\text{CAD}}$$
+   * `netRealizedCadMinor` is credited directly toward the donor `Vehicle` Break-Even Velocity counter and the $20\text{k CAD}$ Working Capital Buffer.
+2. **Taz's Ontario Shop Float Reconciliation (`HELD_BY_TAZ_FLOAT`):**
+   * Cash collected in Ontario with `cashCustodyState == 'HELD_BY_TAZ_FLOAT'` is tracked as an auditable petty-cash subledger balance that decreases when shop `Expense` receipts are logged with `paidFromCashCustody == 'HELD_BY_TAZ_FLOAT'` or when cash is deposited into the Canadian corporate bank account (`SETTLED_CANADA_BANK`):
+   $$\text{RunningFloat}_{\text{CAD}} = \sum \text{CashSales}_{\text{HELD\_BY\_TAZ\_FLOAT}} - \sum \text{Expenses}_{\text{paidFromFloat}} - \sum \text{FloatBankDeposits}_{\text{CAD}}$$
+
 ## 5. Part Condition Grading & Damage Code Reference
 
 ### 5.1 Mechanical Components (Engines, Transmissions, Axles, Marine Powertrains)
@@ -150,6 +170,6 @@ Stored in `Vehicle.rebuildDossierJson` with private file keys in `R2_PRIVATE_EVI
 
 ### 6.2 Trinidad & Tobago FIU & Customs Clearance Checklist
 
-1. **Customer Due Diligence (CDD) Gate:** Any single or linked `VaultTransaction` where `grossCollectedMinor >= 5000000` ($\text{TT\$50,000}$) requires capturing the buyer's government ID reference (`buyerNationalIdHash`) and full name before `isPaymentVerified` can be set to `true`.
+1. **Customer Due Diligence (CDD) Gate:** Any single or linked `SaleTransaction` (`marketNode == 'TRINIDAD_VAULT'`) where `grossCollectedMinor >= 5000000` ($\text{TT\$50,000}$) requires capturing the buyer's government ID reference (`buyerNationalIdHash`) and full name before `isPaymentVerified` can be set to `true`.
 2. **Large Cash Transaction Alert:** Any cash transaction $\ge \text{TT\$90,000}$ triggers a mandatory FIU compliance notice to the Trinidad Vault Admin and Architect/CFO.
 

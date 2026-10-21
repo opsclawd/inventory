@@ -5,7 +5,7 @@
 This Product Requirements Document (PRD) defines the functional workflows, role permissions, acceptance criteria, and phased delivery milestones for the **Cross-Border Salvage, Rebuild & Vault ERP**. 
 
 To avoid premature engineering bloat, delivery is strictly gated by operational proof:
-* **Phase 1 (Days 1–30 — Chain-of-Custody & Trinidad LCL Shipment #1 MVP):** Asset intake, QR tagging, append-only bin/pallet custody tracking, LHD/RHD compatibility filtering, broker-ready Commercial Invoice & Packing List export, and Trinidad Vault Cash-on-Delivery (COD) checkout.
+* **Phase 1 (Days 1–30 — Chain-of-Custody, Adaptive Checkout & Trinidad LCL Shipment #1 MVP):** Asset intake, QR tagging, append-only bin/pallet custody tracking, LHD/RHD compatibility filtering, broker-ready Commercial Invoice & Packing List export, and Unified Adaptive Checkout (`/checkout`) covering both Ontario Domestic sales (CAD + Taz's Shop Float) and Trinidad Vault Cash-on-Delivery (COD) gate release.
 * **Phase 2 (Days 31–60 — Yard Offline Resilience & CFO Subledger):** Offline-first IndexedDB Stripper PWA, "Bad Cop" Pre-Auction Deal Analyzer, receipt-enforced Expense Subledger, and QuickBooks/Xero GL sync.
 * **Phase 3 (Months 3–6 — Assistive AI Vision, Two-Phase eBay Sync & B2B Storefront):** BullMQ AI Vision OCR/grading proposals, eBay Inventory/Browse API integration with Two-Phase Export Locking (`EXPORT_LOCK_PENDING` $\rightarrow$ `EXPORT_LOCK_CONFIRMED`), and the Live Container B2B Storefront with WhatsApp notifications.
 
@@ -24,9 +24,10 @@ Authentication is enforced via Supabase Auth with Row-Level Security (RLS) and A
 | **FR-EXP-01:** Log Expense with Private Receipt | CRUD + Reversal | Create / Read | No Access | Create (Port Fees) | No Access |
 | **FR-LOG-01:** Scan Parts/Assets to Export Pallet | CRUD | Create / Read | Execute Scan | Read Manifest | Read ("Loading" Tab) |
 | **FR-LOG-02:** Seal Pallet & Export Broker Package | CRUD + Seal | Read Packing List | No Access | Read / Download | No Access |
+| **FR-CHK-01:** Execute Ontario Domestic Checkout (CAD Walk-In / FB / Kijiji / Lot) | CRUD | Execute (CAD Only) | No Access | No Access | No Access |
 | **FR-VLT-01:** Check-In Landed Shipment to Vault | CRUD | Read Status | No Access | Execute Check-In | No Access |
 | **FR-VLT-02:** Create 24h B2B Part Reservation | CRUD | Create (Broker) | No Access | CRUD | Create (Rate-Limited) |
-| **FR-VLT-03:** Verify COD Payment & Issue Gate Token | Read + Audit | **Denied (Hard Lock)** | No Access | **Execute (Exclusive)** | No Access |
+| **FR-VLT-03:** Verify Trinidad Vault COD Payment & Issue Gate Token | Read + Audit | **Denied (Hard Lock)** | No Access | **Execute (Exclusive)** | No Access |
 | **FR-VLT-04:** Log Broker Commission & FX Batch | CRUD + Reconcile | Read Own Leads | No Access | Create / Execute | Read Own Commission |
 
 ---
@@ -77,7 +78,19 @@ Phase 1 is engineered around the immediate proof-of-concept shipment to Port of 
 
 ---
 
-### Module E: Trinidad Vault Intake, COD Gate Lock & FX Tracker (`src/modules/logistics-vault`)
+### Module E: Adaptive Checkout, Trinidad Vault Intake, COD Gate Lock & FX Tracker (`src/modules/logistics-vault`)
+
+#### FR-CHK-01: Single Adaptive Mobile Checkout (`/checkout`)
+* **Description:** A single unified mobile checkout workflow (`/checkout`) that creates a `SaleTransaction` and dynamically adapts its UI, currency, channel attribution, and security gates based on the scanned item's custody node (`SaleMarketNode`: `ONTARIO_DOMESTIC` vs. `TRINIDAD_VAULT`).
+* **Ontario Domestic Mode (`marketNode == 'ONTARIO_DOMESTIC'`):**
+  * Triggered when `HUNTER_MECHANIC` or `ARCHITECT_CFO` scans a `PRT-XXXXXX` part or `AST-XXXXXX` whole vehicle located in Ontario (`KEMP` or `RAMS`).
+  * Renders CAD pricing and requires selecting one of the `DomesticSaleChannel` selector pills: `OTTAWA_WALK_IN_CASH`, `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL`, `RAMSAYVILLE_LOT_RETAIL`, or `WHOLESALE_MECHANIC_NETWORK` (plus `EBAY_MOTORS_SHIPPED` and `CAR_PART_WHOLESALE` for non-walk-in domestic fulfillment).
+  * Requires uploading a `paymentProofStorageKey` (photo of cash count, Interac e-Transfer screenshot, or wire confirmation) to `R2_PRIVATE_EVIDENCE_BUCKET`.
+* **Automatic Post-Checkout Side Effects in Ontario Mode:**
+  1. **Immediate eBay Delist (`OutboxEvent`):** Emits `PartSoldLocallyDelistEbayRequested` in the same ACID database transaction to immediately zero out / withdraw any active eBay Motors offer so local cash sales never double-sell online.
+  2. **VIN Break-Even Velocity & Capital Buffer Credit:** Computes `netRealizedCadMinor` (`grossCollectedMinor - platformFeeMinor - shippingCostMinor`) and credits it directly to the donor vehicle's Break-Even Velocity counter and the $20k Capital Buffer.
+  3. **Taz's Shop Float Cash-Custody Tracking:** Tracks physical cash custody (`HELD_BY_TAZ_FLOAT` for cash in Taz's hands vs. `SETTLED_CANADA_BANK` for Interac e-Transfer/wire/payouts) as an auditable shop petty-cash float that can be drawn down when logging shop `Expense` receipts (`paidFromCashCustody = 'HELD_BY_TAZ_FLOAT'`).
+  4. **Whole-Vehicle Lot Release (`RAMSAYVILLE_LOT_RETAIL`):** Enforces uploading a signed Bill of Sale (`billOfSaleStorageKey`) at both the API and PostgreSQL `CHECK` constraint layers, transitions the `Vehicle` to `SOLD_RETAIL_ONTARIO`, and frees up 1 of the 8 Ramsayville shop lot capacity slots.
 
 #### FR-VLT-01: Landed Container Check-In & Discrepancy Alerting
 * **Description:** When a shipment clears Port of Spain customs and arrives at the family warehouse, the `TRINIDAD_VAULT_ADMIN` scans each whole asset and `PRT-XXXXXX` part tag onto a local vault shelf barcode (`POSV-V01-R01-S01-B01`).
