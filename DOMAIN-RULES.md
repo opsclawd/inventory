@@ -141,8 +141,16 @@ All configurable parameters live in `src/core/config/pricing-policy.json` and ca
    * Note: `targetExportMarkupOnCost` ($0.65$) represents a **$65\%$ markup on allocated cost** (equivalent to a $39.4\%$ gross margin on pre-tax wholesale price before unallocated yard overhead), which is distinct from realized net margin after landed taxes, FX slippage, and broker commissions.
    * Protects Canadian principal against parallel-market FX spread ($\text{FX}_{\text{shadow}}$) and holds back the broker's $10\%$ referral commission:
    $$\text{VaultFloor}_{\text{TTD}} = \frac{\left(\text{AllocatedCost}_{\text{CAD}} \times (1 + \text{TargetMarkup}_{\text{export}}) \times \text{FX}_{\text{CAD}\rightarrow\text{USD}} \times \text{FX}_{\text{shadow}}\right) + \text{TotalTaxesAndFreight}_{\text{TTD}}}{1 - r_{\text{comm}}}$$
+4. **Grade-Adjusted Market Baseline & Recommended Wholesale Ask vs. Hard Cost Floor:**
+   * Using $\gamma_{\text{ARA}}$ from `araGradeMultipliers` corresponding to `Part.conditionGrade`:
+   $$\text{GradeAdjustedMarketValue}_{\text{CAD}} = \text{round}\left(\text{CompBaseline}_{\text{CAD}} \times \gamma_{\text{ARA}}\right)$$
+   * Domestic `retailPriceCadMinor` defaults to $\text{GradeAdjustedMarketValue}_{\text{CAD}}$.
+   * In Trinidad, the **Recommended Wholesale Ask Price (`recommendedAskTtdMinor`)** scales with $\gamma_{\text{ARA}}$, while the **Minimum Vault COD Floor Price (`vaultFloorPriceTtdMinor`)** remains strictly anchored to actual allocated cost basis + landed taxes/freight so discounting a `GRADE_C` part never breaches hard cost recovery without an explicit CFO override.
+5. **Rule `RULE-PRC-002` (Pre-VAT Broker Commission Base):**
+   * `SaleTransaction.brokerCommissionMinor` is always calculated strictly on the **pre-tax subtotal (`subtotalMinor`)**, never on collected output VAT (`taxOrVatMinor`):
+   $$\text{brokerCommissionMinor} = \text{round}\left(\text{subtotalMinor} \times \frac{\text{brokerCommissionBps}}{10000}\right)$$
 
-### 4.3 Domestic Net Realization & Shop Float Reconciliation Formula
+### 4.3 Domestic Net Realization, Shop Float & Trinidad Bank Cap Reconciliation Formulas
 
 1. **Domestic Channel Fee & Net Realization (`netRealizedCadMinor`):**
    * Local Ontario cash/e-Transfer channels (`OTTAWA_WALK_IN_CASH`, `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL`, `RAMSAYVILLE_LOT_RETAIL`, `WHOLESALE_MECHANIC_NETWORK`) incur $0\%$ platform fees ($r_{\text{channel\_fee}} = 0.0$), whereas `EBAY_MOTORS_SHIPPED` deducts $13.25\%$ ($r_{\text{channel\_fee}} = 0.1325$) plus outbound courier label costs:
@@ -150,16 +158,20 @@ All configurable parameters live in `src/core/config/pricing-policy.json` and ca
    $$\text{NetRealized}_{\text{CAD}} = \text{GrossCollected}_{\text{CAD}} - \text{PlatformFee}_{\text{CAD}} - \text{ShippingCost}_{\text{CAD}}$$
    * `netRealizedCadMinor` is credited directly toward the donor `Vehicle` Break-Even Velocity counter and the $20\text{k CAD}$ Working Capital Buffer.
 2. **Taz's Ontario Shop Float Reconciliation (`HELD_BY_TAZ_FLOAT`):**
-   * Cash collected in Ontario with `cashCustodyState == 'HELD_BY_TAZ_FLOAT'` is tracked as an auditable petty-cash subledger balance that decreases when shop `Expense` receipts are logged with `paidFromCashCustody == 'HELD_BY_TAZ_FLOAT'` or when cash is deposited into the Canadian corporate bank account (`SETTLED_CANADA_BANK`):
-   $$\text{RunningFloat}_{\text{CAD}} = \sum \text{CashSales}_{\text{HELD\_BY\_TAZ\_FLOAT}} - \sum \text{Expenses}_{\text{paidFromFloat}} - \sum \text{FloatBankDeposits}_{\text{CAD}}$$
+   * Cash collected in Ontario with `cashCustodyState == 'HELD_BY_TAZ_FLOAT'` is tracked as an auditable petty-cash subledger balance that decreases when shop `Expense` receipts are logged with `paidFromCashCustody == 'HELD_BY_TAZ_FLOAT'` or when physical cash is deposited into the Canadian corporate bank account via `CashCustodyTransfer` (`SETTLED_CANADA_BANK`):
+   $$\text{RunningTazFloat}_{\text{CAD}} = \sum \text{SaleTransaction}_{\text{HELD\_BY\_TAZ\_FLOAT}} - \sum \text{Expense}_{\text{paidFromFloat}} - \sum \text{CashCustodyTransfer}_{\text{FLOAT}\rightarrow\text{CANADA\_BANK}}$$
+3. **Trinidad Commercial Bank Cap Reconciliation (`trinidadDepositAlertThresholdTtdMinor`):**
+   * Running TTD balances per Trinidadian commercial bank institution ($k$) reconcile direct buyer bank transfers, physical Vault cash deposits via `CashCustodyTransfer`, and outbound FX repatriation batches (`CurrencySettlement`):
+   $$\text{TrinidadBankBalance}_{\text{Bank } k} = \sum \text{DirectWireSales}_{\text{Bank } k} + \sum \text{CashCustodyTransfer}_{\text{VAULT}\rightarrow\text{Bank } k} - \sum \text{CurrencySettlement}_{\text{From Bank } k}$$
 
-### 4.4 Pro-Rata Donor Cost Allocation, Market Price Guard & 3-Tier Shipment Profitability
+### 4.4 Two-Stage Donor Cost Allocation, Market Price Guard & 3-Tier Shipment Profitability
 
-1. **Pro-Rata Value-Weighted Donor Cost Allocation Formula & Invariant:**
-   * Each stripped part's `allocatedCostBasisCadMinor` is computed pro-rata by its estimated market value share of the donor vehicle's net acquisition and strip cost:
-   $$\text{AllocatedCost}_{\text{Part}} = \left(\text{DonorBuyPrice} + \text{BuyerFees} + \text{Tow} + \text{StripLabor} - \text{ScrapShellRecovery}\right) \times \frac{\text{PartEstimatedMarketValueCAD}}{\sum_{i=1}^{n} \text{PartEstimatedMarketValueCAD}_i}$$
-   * Across every dismantled donor `Vehicle`, the sum of allocated part cost bases plus scrap metal recovery value and any retained hull/shell value must reconcile 100% with the donor vehicle's total acquisition and dismantling cost:
-   $$\sum \text{Part.allocatedCostBasisCadMinor} + \text{ScrapRecoveryValue}_{\text{CAD}} + \text{RetainedHullValue}_{\text{CAD}} = \text{Vehicle.totalAcquisitionAndStripCost}_{\text{CAD}}$$
+1. **Two-Stage Donor Cost Allocation Rule (Provisional at Strip $\rightarrow$ Final True-Up at Hulk Scrap):**
+   * To resolve the operational timing mismatch between stripping/pricing a part on Day 2 and weighing the crushed scrap hulk on Day 14, donor cost allocation operates in two stages:
+   * **Stage 1 — Provisional Cost Basis (At Part Strip Time):** When a part is stripped from an active donor vehicle (`DISMANTLING_IN_PROGRESS`), its initial `allocatedCostBasisCadMinor` is computed using the vehicle's acquisition price plus logged direct expenses (towing, auction buyer fees, strip labor) to date, weighted against the greater of the vehicle's target gross realization or cumulative stripped parts market value:
+     $$\text{ProvisionalCostBasis}_{\text{Part}} = \left(\text{ActualPurchasePrice}_{\text{CAD}} + \text{LoggedDirectExpenses}_{\text{CAD}}\right) \times \frac{\text{GradeAdjustedMarketValue}_{\text{CAD}}}{\max\left(\text{TargetGrossRealization}_{\text{CAD}}, \sum \text{StrippedPartsMarketValue}_{\text{CAD}}\right)}$$
+   * **Stage 2 — Final Cost Basis True-Up (At `HULK_AWAITING_SCRAP` / `SCRAPPED_METAL_CLEARED`):** When dismantling completes and `scrapRecoveryCadMinor` is recorded from `scrapMetalTicketKey`, the system reconciles the exact remaining unrecovered donor cost ($\text{TotalDonorOutlay}_{\text{CAD}} - \text{ScrapRecovery}_{\text{CAD}} - \sum \text{AlreadySoldPartsAllocatedCost}_{\text{CAD}}$) pro-rata across all remaining unsold stripped parts so the accounting identity holds $100\%$:
+     $$\sum_{i=1}^{n} \text{Part.allocatedCostBasisCadMinor}_i + \text{Vehicle.scrapRecoveryCadMinor} = \text{Vehicle.totalAcquisitionAndStripCostCadMinor}$$
 2. **Rule `RULE-PRC-001` (Floor-Exceeds-Market Guard):**
    * During pre-auction Deal Analysis and pre-shipment Pallet Scanning, if an item's computed `vaultFloorPriceTtdMinor > brokerMarketPriceTtdMinor`, the system flags a high-visibility `MARGIN_INVERSION_WARNING` blocking export packing unless explicitly overridden by `ARCHITECT_CFO`.
 3. **Tier 1 — Projected Contribution (CAD):**
@@ -207,5 +219,6 @@ Stored in `Vehicle.rebuildDossierJson` with private file keys in `R2_PRIVATE_EVI
 ### 6.2 Trinidad & Tobago FIU & Customs Clearance Checklist
 
 1. **Customer Due Diligence (CDD) Gate (Encrypted Private ID Storage):** Any single or linked `SaleTransaction` (`marketNode == 'TRINIDAD_VAULT'`) where `grossCollectedMinor >= 5000000` ($\text{TT\$50,000}$) requires uploading a private scan/photo of the buyer's government ID (`buyerIdDocumentStorageKey` in `R2_PRIVATE_EVIDENCE_BUCKET`), storing the AES-256-GCM application-encrypted ID type and number (`buyerIdNumberEncrypted`), and recording the buyer's full name before `isPaymentVerified` can be set to `true` (ensuring auditability upon statutory FIU inspection).
-2. **Large Cash Transaction Alert:** Any cash transaction $\ge \text{TT\$90,000}$ triggers a mandatory FIU compliance notice to the Trinidad Vault Admin and Architect/CFO.
+2. **Large Cash Transaction Alert:** Any single or linked cash transaction $\ge \text{TT\$90,000}$ (`9000000` minor units) triggers a mandatory FIU compliance notice to the Trinidad Vault Admin and Architect/CFO.
+3. **Rule `RULE-COMP-FIU-01` (Deterministic 30-Day Rolling Window for Linked FIU Transactions):** A transaction is evaluated as **linked** if the current `SaleTransaction.grossCollectedMinor` plus the sum of `grossCollectedMinor` across all non-voided `SaleTransaction` records (`marketNode == 'TRINIDAD_VAULT'` and `isVoidedOrReversed == false`) within a **rolling 30-calendar-day window (`createdAt >= now() - 30 days`)** matching the same `buyerPhoneE164`, normalized `lower(trim(buyerName))`, or `buyerIdNumberEncrypted` reaches or exceeds `5000000` ($\text{TT\$50,000}$) for the CDD Government ID gate, or `9000000` ($\text{TT\$90,000}$) for the Large Cash Transaction Alert.
 

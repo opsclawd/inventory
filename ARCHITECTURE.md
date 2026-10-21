@@ -240,15 +240,16 @@ model User {
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
-  strippedParts     Part[]              @relation("StrippedByUser")
-  custodyEvents     CustodyEvent[]
-  loggedExpenses    Expense[]           @relation("LoggedByUser")
-  salesExecuted     SaleTransaction[]   @relation("SoldByUser")
-  brokeredSales     SaleTransaction[]   @relation("BrokerUser")
-  verifiedSales     SaleTransaction[]   @relation("VerifiedByAdmin")
-  cycleCountTasks   CycleCountTask[]    @relation("AssignedVaultAdmin")
-  wishLists         PreOrderWishList[]
-  auditLogs         AuditLog[]
+  strippedParts         Part[]                @relation("StrippedByUser")
+  custodyEvents         CustodyEvent[]
+  loggedExpenses        Expense[]             @relation("LoggedByUser")
+  salesExecuted         SaleTransaction[]     @relation("SoldByUser")
+  brokeredSales         SaleTransaction[]     @relation("BrokerUser")
+  verifiedSales         SaleTransaction[]     @relation("VerifiedByAdmin")
+  cashTransfersRecorded CashCustodyTransfer[] @relation("TransferRecordedByUser")
+  cycleCountTasks       CycleCountTask[]      @relation("AssignedVaultAdmin")
+  wishLists             PreOrderWishList[]
+  auditLogs             AuditLog[]
 }
 
 model StorageLocation {
@@ -290,6 +291,12 @@ model Vehicle {
   storageLocationId           String?                    @db.Uuid
   storageLocation             StorageLocation?           @relation(fields: [storageLocationId], references: [id])
 
+  // Export Physical Specs & Tariff Classification (For Whole-Unit Exports: Watercraft, Equipment, Cars)
+  weightKg                    Decimal?                   @db.Decimal(8, 2)
+  dimensionsCm                Json?                      // { "l": 320, "w": 125, "h": 110 }
+  suggestedHsCode             String                     @default("8903.99")
+  brokerVerifiedHsCode        String?
+
   // Capital Gate & CFO Deal Analyzer Baseline (CAD Cents)
   estimatedMaxBidCadMinor     Int
   actualPurchasePriceCadMinor Int                        @default(0)
@@ -318,6 +325,7 @@ model Vehicle {
   fluidsDrainedAt             DateTime?
   steamCleanedReceiptKey      String?
   scrapMetalTicketKey         String?                    // Weigh-scale ticket required for SCRAPPED_METAL_CLEARED
+  scrapRecoveryCadMinor       Int                        @default(0) // CAD Cents received on scrapMetalTicketKey weigh receipt
   scrappedClearedAt           DateTime?
 
   realizedRetailSaleCadMinor  Int?
@@ -331,9 +339,10 @@ model Vehicle {
   custodyHistory              CustodyEvent[]
   b2bReservations             B2BReservation[]
   cycleCountItems             CycleCountTask[]
+  matchedWishLists            PreOrderWishList[]         @relation("MatchedVehicleWishList")
   shipmentId                  String?                    @db.Uuid
   shipment                    Shipment?                  @relation(fields: [shipmentId], references: [id])
-  saleTransactionItem         SaleTransactionVehicleItem?
+  saleTransactionItems        SaleTransactionVehicleItem[]
 
   @@index([lifecycleState, operationalLane])
   @@index([availabilityState])
@@ -406,7 +415,8 @@ model Part {
   custodyHistory             CustodyEvent[]
   b2bReservations            B2BReservation[]
   cycleCountItems            CycleCountTask[]
-  saleTransactionItem        SaleTransactionPartItem?
+  matchedWishLists           PreOrderWishList[]         @relation("MatchedPartWishList")
+  saleTransactionItems       SaleTransactionPartItem[]
 
   @@index([custodyState, availabilityState])
   @@index([ebaySyncState])
@@ -534,9 +544,14 @@ model PreOrderWishList {
   maxBidWillingTtdMinor  Int
   isFulfilled            Boolean                   @default(false)
   matchedPartId          String?                   @db.Uuid
+  matchedPart            Part?                     @relation("MatchedPartWishList", fields: [matchedPartId], references: [id])
+  matchedVehicleId       String?                   @db.Uuid
+  matchedVehicle         Vehicle?                  @relation("MatchedVehicleWishList", fields: [matchedVehicleId], references: [id])
   createdAt              DateTime                  @default(now())
 
   @@index([targetMake, targetModel, isFulfilled])
+  @@index([matchedPartId])
+  @@index([matchedVehicleId])
 }
 
 model B2BReservation {
@@ -606,6 +621,11 @@ model SaleTransaction {
   gateTokenExpiresAt      DateTime?
   gateReleasedAt          DateTime?
 
+  // Void / Reversal Support (Allows re-selling items without violating financial table immutability)
+  isVoidedOrReversed      Boolean              @default(false)
+  reversesSaleTxId        String?              @db.Uuid
+  voidReason              String?
+
   // Accounting & FX Settlement Links
   accountingSyncStatus    AccountingSyncStatus @default(PENDING_SYNC)
   externalGlJournalId     String?
@@ -625,18 +645,47 @@ model SaleTransactionPartItem {
   id                String          @id @default(uuid()) @db.Uuid
   saleTransactionId String          @db.Uuid
   saleTransaction   SaleTransaction @relation(fields: [saleTransactionId], references: [id])
-  partId            String          @unique @db.Uuid
+  partId            String          @db.Uuid // Active uniqueness enforced via partial index unique_active_sold_part
   part              Part            @relation(fields: [partId], references: [id])
   soldPriceMinor    Int
+  isActiveSale      Boolean         @default(true)
+
+  @@index([partId])
 }
 
 model SaleTransactionVehicleItem {
   id                String          @id @default(uuid()) @db.Uuid
   saleTransactionId String          @db.Uuid
   saleTransaction   SaleTransaction @relation(fields: [saleTransactionId], references: [id])
-  vehicleId         String          @unique @db.Uuid
+  vehicleId         String          @db.Uuid // Active uniqueness enforced via partial index unique_active_sold_vehicle
   vehicle           Vehicle         @relation(fields: [vehicleId], references: [id])
   soldPriceMinor    Int
+  isActiveSale      Boolean         @default(true)
+
+  @@index([vehicleId])
+}
+
+// Tracks partial lump-sum cash drops from Taz's Ontario Shop Float or Trinidad Vault safe to commercial banks
+model CashCustodyTransfer {
+  id                     String               @id @default(uuid()) @db.Uuid
+  transferCode           String               @unique // e.g., "DROP-ONT-2026-0012" or "DROP-POS-2026-0008"
+  marketNode             SaleMarketNode
+  fromCustodyState       CashCustodyState     // HELD_BY_TAZ_FLOAT or HELD_IN_TRINIDAD_VAULT
+  toCustodyState         CashCustodyState     // SETTLED_CANADA_BANK or DEPOSITED_TRINIDAD_BANK
+  currency               CurrencyCode
+  amountMinor            Int
+  equivalentCadMinor     Int
+  commercialBankName     String?              // Tracked against TT$200,000 DIC cap when toCustodyState == DEPOSITED_TRINIDAD_BANK
+  depositSlipStorageKey  String               // Mandatory private R2 key (enforced non-empty via SQL CHECK)
+  recordedByUserId       String               @db.Uuid
+  recordedByUser         User                 @relation("TransferRecordedByUser", fields: [recordedByUserId], references: [id])
+  accountingSyncStatus   AccountingSyncStatus @default(PENDING_SYNC)
+  externalGlJournalId    String?
+  transferredAt          DateTime             @default(now())
+  createdAt              DateTime             @default(now())
+
+  @@index([marketNode, fromCustodyState, toCustodyState])
+  @@index([commercialBankName])
 }
 
 // Weekly Blind Cycle Count task for physical Trinidad Vault audit & anti-shrinkage reconciliation
@@ -720,8 +769,9 @@ model AuditLog {
 Prisma does not natively express `CHECK` constraints or immutable triggers. The initial migration MUST include:
 
 ```sql
--- 1. Enforce non-empty private receipt key on Expense
+-- 1. Enforce non-empty private receipt/slip keys on Expense and CashCustodyTransfer
 ALTER TABLE "Expense" ADD CONSTRAINT expense_receipt_non_empty CHECK (length(trim("receiptStorageKey")) > 0);
+ALTER TABLE "CashCustodyTransfer" ADD CONSTRAINT transfer_slip_non_empty CHECK (length(trim("depositSlipStorageKey")) > 0);
 
 -- 2. Enforce Commission Holdback Invariant at DB level
 ALTER TABLE "SaleTransaction" ADD CONSTRAINT commission_requires_verified_payment
@@ -741,8 +791,9 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER lock_audit_log BEFORE UPDATE OR DELETE ON "AuditLog" FOR EACH ROW EXECUTE FUNCTION prevent_audit_tampering();
 CREATE TRIGGER lock_expense_delete BEFORE DELETE ON "Expense" FOR EACH ROW EXECUTE FUNCTION prevent_audit_tampering();
 CREATE TRIGGER lock_sale_tx_delete BEFORE DELETE ON "SaleTransaction" FOR EACH ROW EXECUTE FUNCTION prevent_audit_tampering();
+CREATE TRIGGER lock_cash_transfer_delete BEFORE DELETE ON "CashCustodyTransfer" FOR EACH ROW EXECUTE FUNCTION prevent_audit_tampering();
 
--- 4b. Block mutation of immutable financial columns on Expense & SaleTransaction while permitting workflow updates
+-- 4b. Block mutation of immutable financial columns on Expense & SaleTransaction while permitting workflow/void updates
 CREATE OR REPLACE FUNCTION prevent_expense_financial_mutation() RETURNS TRIGGER AS $$
 BEGIN
   IF NEW."amountOriginalMinor" IS DISTINCT FROM OLD."amountOriginalMinor"
@@ -763,6 +814,11 @@ BEGIN
      OR NEW."netRealizedCadMinor" IS DISTINCT FROM OLD."netRealizedCadMinor"
      OR NEW."paymentProofStorageKey" IS DISTINCT FROM OLD."paymentProofStorageKey" THEN
     RAISE EXCEPTION 'Immutable financial columns on SaleTransaction cannot be modified after creation.';
+  END IF;
+  -- If transaction is voided/reversed, automatically release active lock on child line items
+  IF NEW."isVoidedOrReversed" = true AND OLD."isVoidedOrReversed" = false THEN
+    UPDATE "SaleTransactionPartItem" SET "isActiveSale" = false WHERE "saleTransactionId" = NEW."id";
+    UPDATE "SaleTransactionVehicleItem" SET "isActiveSale" = false WHERE "saleTransactionId" = NEW."id";
   END IF;
   RETURN NEW;
 END;
@@ -797,9 +853,11 @@ ALTER TABLE "CycleCountTask" ADD CONSTRAINT cycle_count_target_xor CHECK (
   ("partId" IS NOT NULL AND "vehicleId" IS NULL) OR ("partId" IS NULL AND "vehicleId" IS NOT NULL)
 );
 
--- 8. Prevent overlapping active B2B holds on the same Part or Vehicle
+-- 8. Prevent overlapping active B2B holds and active sales on the same Part or Vehicle
 CREATE UNIQUE INDEX unique_active_part_reservation ON "B2BReservation" ("partId") WHERE "isActive" = true AND "partId" IS NOT NULL;
 CREATE UNIQUE INDEX unique_active_vehicle_reservation ON "B2BReservation" ("vehicleId") WHERE "isActive" = true AND "vehicleId" IS NOT NULL;
+CREATE UNIQUE INDEX unique_active_sold_part ON "SaleTransactionPartItem" ("partId") WHERE "isActiveSale" = true;
+CREATE UNIQUE INDEX unique_active_sold_vehicle ON "SaleTransactionVehicleItem" ("vehicleId") WHERE "isActiveSale" = true;
 ```
 
 ## 5. Deterministic State Machines & Concurrency Protocols
@@ -826,6 +884,7 @@ An external HTTP request to eBay cannot run inside a PostgreSQL transaction. To 
 ```
 
 * **Physical Seal Gate Rule:** `ShipmentPallet.sealedAt` CANNOT be populated if any child `Part` on that pallet has `ebaySyncState == 'EXPORT_LOCK_PENDING'` or `custodyState == 'STRIPPED_RAW_OFFLINE'`. All parts must reach `EXPORT_LOCK_CONFIRMED` (or `NOT_LISTED`) before a pallet can be sealed.
+* **Online vs. Offline Initial `PartCustodyState` Assignment:** During 3-tap part intake (`FR-INT-02`), if the worker scans both the part QR (`PRT-XXXXXX`) and a valid destination storage bin QR (`toLocationBarcode`, e.g., `KEMP-C01-R01-S01-B01`) while online (or upon server sync of the intake + bin scan), `Part.custodyState` transitions immediately to `SHELVED_ONTARIO_CONTAINER` (and `storageLocationId` is populated). `STRIPPED_RAW_OFFLINE` is strictly a transient state for parts captured without a destination bin scan or queued locally in IndexedDB awaiting server reconciliation.
 
 ### 5.2 Offline Custody Chain & Conflict Resolution
 
