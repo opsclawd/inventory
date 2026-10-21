@@ -2,31 +2,31 @@
 
 ## 1. System Overview & Architectural Principles
 
-This platform is a **Domain-Driven Design (DDD) Modular Monolith** adhering to **Hexagonal Architecture (Ports & Adapters)**[span_8](start_span)[span_8](end_span). It serves as the authoritative **Chain of Custody, Inventory State, and Operational Subledger** across four operational nodes[span_9](start_span)[span_9](end_span)[span_10](start_span)[span_10](end_span):
+This platform is a **Domain-Driven Design (DDD) Modular Monolith** adhering to **Hexagonal Architecture (Ports & Adapters)**. It serves as the authoritative **Chain of Custody, Inventory State, and Operational Subledger** across four operational nodes:
 
-1. **Node 1 (Kemptville Yard):** Offline-first vehicle/watercraft dismantling, QR tagging, and container bin storage[span_11](start_span)[span_11](end_span).
-2. **Node 2 (Ramsayville Shop):** Vehicle repair, rebuild dossier tracking, and domestic retail preparation[span_12](start_span)[span_12](end_span).
-3. **Node 3 (Export Consolidation & Transit):** LCL pallet / FCL container manifesting and customs broker data output[span_13](start_span)[span_13](end_span)[span_14](start_span)[span_14](end_span).
-4. **Node 4 (Trinidad Vault):** Landed check-in, B2B reservation holds, strict Cash-on-Delivery (COD) checkout, and FX batch settlement[span_15](start_span)[span_15](end_span).
+1. **Node 1 (Kemptville Yard):** Offline-first vehicle/watercraft dismantling, QR tagging, and container bin storage.
+2. **Node 2 (Ramsayville Shop):** Vehicle repair, rebuild dossier tracking, and domestic retail preparation.
+3. **Node 3 (Export Consolidation & Transit):** LCL pallet / FCL container manifesting and customs broker data output.
+4. **Node 4 (Trinidad Vault):** Landed check-in, B2B reservation holds, strict Cash-on-Delivery (COD) checkout, and FX batch settlement.
 
 ### Core Architectural Invariants
 
-1. **PostgreSQL is the Single Source of Inventory Truth:** External marketplaces (eBay) and messaging channels (WhatsApp) are asynchronous projections[span_16](start_span)[span_16](end_span). External HTTP calls NEVER execute inside a PostgreSQL database transaction[span_17](start_span)[span_17](end_span).
-2. **Transactional Outbox Pattern:** All cross-module side effects and external API calls are persisted as `OutboxEvent` records within the same ACID transaction as the domain state mutation and processed asynchronously by BullMQ workers[span_18](start_span)[span_18](end_span)[span_19](start_span)[span_19](end_span).
-3. **Strict Storage Segregation (Public vs. Private R2):** Publicly accessible commerce images and private financial/compliance records are physically segregated into separate Cloudflare R2 buckets with distinct access policies[span_20](start_span)[span_20](end_span).
-4. **Operational Subledger, External General Ledger:** This system tracks unit-level (VIN/HIN/SKU) cost basis and profitability[span_21](start_span)[span_21](end_span)[span_22](start_span)[span_22](end_span). Statutory double-entry accounting is delegated to an external General Ledger (QuickBooks Online / Xero) via an outbound sync adapter[span_23](start_span)[span_23](end_span).
+1. **PostgreSQL is the Single Source of Inventory Truth:** External marketplaces (eBay) and messaging channels (WhatsApp) are asynchronous projections. External HTTP calls NEVER execute inside a PostgreSQL database transaction.
+2. **Transactional Outbox Pattern:** All cross-module side effects and external API calls are persisted as `OutboxEvent` records within the same ACID transaction as the domain state mutation and processed asynchronously by BullMQ workers.
+3. **Strict Storage Segregation (Public vs. Private R2):** Publicly accessible commerce images and private financial/compliance records are physically segregated into separate Cloudflare R2 buckets with distinct access policies.
+4. **Operational Subledger, External General Ledger:** This system tracks unit-level (VIN/HIN/SKU) cost basis and profitability. Statutory double-entry accounting is delegated to an external General Ledger (QuickBooks Online / Xero) via an outbound sync adapter.
 
 ---
 
 ## 2. Technical Stack Specification
 
-* **Runtime & Application Framework:** Next.js 15+ (App Router), React 19, Node.js v22 LTS, TypeScript 5.x (`strict: true`)[span_24](start_span)[span_24](end_span).
-* **Mobile Offline Client (PWA):** Workbox Service Workers, IndexedDB (`Dexie.js`) for offline mutation queues and binary image blobs, `@zxing/browser` + native `BarcodeDetector` API[span_25](start_span)[span_25](end_span).
-* **Database & ORM:** PostgreSQL 16+ (Supabase) with Row-Level Security (RLS), connection pooling, and Prisma ORM[span_26](start_span)[span_26](end_span).
-* **Queue & Background Workers:** BullMQ backed by Redis 7.x (running in standalone Node.js worker process)[span_27](start_span)[span_27](end_span)[span_28](start_span)[span_28](end_span).
-* **Object Storage:** Cloudflare R2[span_29](start_span)[span_29](end_span)[span_30](start_span)[span_30](end_span):
-  * `R2_PUBLIC_MEDIA_BUCKET`: Sanitized, EXIF-stripped WebP product photos for eBay/WhatsApp/Storefront[span_31](start_span)[span_31](end_span)[span_32](start_span)[span_32](end_span).
-  * `R2_PRIVATE_EVIDENCE_BUCKET`: Zero-public-access bucket (accessed strictly via short-lived, audit-logged pre-signed URLs) for expense receipts, bank wire slips, customs docs, and vehicle titles[span_33](start_span)[span_33](end_span).
+* **Runtime & Application Framework:** Next.js 15+ (App Router), React 19, Node.js v22 LTS, TypeScript 5.x (`strict: true`).
+* **Mobile Offline Client (PWA):** Workbox Service Workers, IndexedDB (`Dexie.js`) for offline mutation queues and binary image blobs, `@zxing/browser` + native `BarcodeDetector` API.
+* **Database & ORM:** PostgreSQL 16+ (Supabase) with Row-Level Security (RLS), connection pooling, and Prisma ORM.
+* **Queue & Background Workers:** BullMQ backed by Redis 7.x (running in standalone Node.js worker process).
+* **Object Storage:** Cloudflare R2:
+  * `R2_PUBLIC_MEDIA_BUCKET`: Sanitized, EXIF-stripped WebP product photos for eBay/WhatsApp/Storefront.
+  * `R2_PRIVATE_EVIDENCE_BUCKET`: Zero-public-access bucket (accessed strictly via short-lived, audit-logged pre-signed URLs) for expense receipts, bank wire slips, customs docs, and vehicle titles.
 
 ---
 
@@ -64,7 +64,7 @@ src/
 
 ## 4. Production Database Schema (`schema.prisma`)
 
-```
+```prisma
 // prisma/schema.prisma
 datasource db {
   provider = "postgresql"
@@ -586,7 +586,7 @@ model AuditLog {
 
 Prisma does not natively express `CHECK` constraints or immutable triggers. The initial migration MUST include:
 
-```
+```sql
 -- 1. Enforce non-empty private receipt key on Expense
 ALTER TABLE "Expense" ADD CONSTRAINT expense_receipt_non_empty CHECK (length(trim("receiptStorageKey")) > 0);
 
@@ -614,9 +614,9 @@ CREATE TRIGGER lock_vault_tx_delete BEFORE DELETE ON "VaultTransaction" FOR EACH
 
 ### 5.1 Two-Phase Marketplace-to-Export Lock (Preventing Double-Selling)
 
-An external HTTP request to eBay cannot run inside a PostgreSQL transaction. To prevent double-selling between eBay Motors and outbound Trinidad pallets, the system enforces a ​**Two-Phase Reservation State Machine**​:
+An external HTTP request to eBay cannot run inside a PostgreSQL transaction. To prevent double-selling between eBay Motors and outbound Trinidad pallets, the system enforces a **Two-Phase Reservation State Machine**:
 
-```
+```text
 [SYNDICATED_DOMESTIC_LIVE]
            │
            │ (Worker scans part for Trinidad export OR B2B buyer reserves)
@@ -647,7 +647,7 @@ An external HTTP request to eBay cannot run inside a PostgreSQL transaction. To 
 
 ## 6. Hexagonal Ports Specification (`src/core/ports/index.ts`)
 
-```
+```typescript
 // src/core/ports/index.ts
 
 export interface DecodedAssetSpec {
@@ -668,7 +668,7 @@ export interface DecodedAssetSpec {
  * and 12-char Watercraft HINs to Marine HIN Decoder / manual fallback).
  */
 export interface IAssetDecoderPort {
-  decodeIdentifier(vinOrHin: string, modelYearHint?: number): Promise<DecodedAssetSpec null |>;
+  decodeIdentifier(vinOrHin: string, modelYearHint?: number): Promise<DecodedAssetSpec | null>;
 }
 
 /**
