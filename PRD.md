@@ -10,7 +10,7 @@ This Product Requirements Document (PRD) defines the functional workflows, role 
 To avoid premature engineering bloat, delivery is strictly gated by operational proof and split so software never blocks vessel departure:
 * **Phase 1A (Pre-Vessel Departure — Weekend Build):** Shared Core (`shared` schema) + Salvage Shipment #1 MVP (`salvage` schema): Asset & Part QR/photo/bin intake (`FR-INT-01`, `FR-INT-02`), Expense logging with receipt photo (`FR-EXP-01`), and Broker-Ready Commercial Invoice & Packing List CSV/PDF export (`FR-LOG-01`, `FR-LOG-02`). *(Automated CERS fixed-width `.txt` generation is deferred to the licensed customs broker for Shipment #1).*
 * **Phase 1B (During 14-Day Ocean Transit):** Trinidad Vault check-in (`FR-VLT-01`), Landed Cost allocation (`FR-VLT-02`), and Adaptive Mobile Checkout (`FR-CHK-01` / `FR-VLT-03`) covering both Ontario Domestic sales (CAD + Taz's Shop Float) and Trinidad Vault Cash-on-Delivery (COD) release.
-* **Phase 2A (Days 31–60 — Yard Offline Resilience, Blind Cycle Counts & CFO Subledger):** Offline-first IndexedDB Stripper PWA, Weekly Blind Cycle Counts (`FR-VLT-05`), "Bad Cop" Pre-Auction Deal Analyzer (`FR-DEAL-01`), receipt-enforced Expense Subledger, and QuickBooks/Xero GL sync.
+* **Phase 2A (Days 31–60 — Yard Offline Resilience, Blind Cycle Counts, Local FB/Kijiji Extension & CFO Subledger):** Offline-first IndexedDB Stripper PWA, Weekly Blind Cycle Counts (`FR-VLT-05`), Local FB Marketplace/Kijiji Chrome Extension (`FR-MKT-02`), "Bad Cop" Pre-Auction Deal Analyzer (`FR-DEAL-01`), receipt-enforced Expense Subledger with 3-Rule Compensation & Piece-Rate Payout Gates (`FR-EXP-01`, `FR-EXP-02`), and QuickBooks/Xero GL sync.
 * **Phase 2B (Days 45–90 — Cannabis Nursery, Mass-Balance Processing & CTLS Compliance):** Cannabis Compliance Module (`cannabis` schema, `FR-CAN-01` to `FR-CAN-04`), leveraging the already-built QR scanner, ZPL thermal printer, hierarchical location engine, and receipt-gated expense ledger as Brockville/Kemptville facility operations come online.
 * **Phase 3 (Months 3–6 — Assistive AI Vision, Two-Phase eBay Sync, Two-Step Gate Token & B2B Storefront):** BullMQ AI Vision OCR/grading proposals, eBay Inventory/Browse API integration with Two-Phase Export Locking (`EXPORT_LOCK_PENDING` $\rightarrow$ `EXPORT_LOCK_CONFIRMED`), Two-Step HMAC Gate Token exit scanning, and the Live Container B2B Storefront with WhatsApp notifications.
 
@@ -35,9 +35,11 @@ Authentication is enforced via Supabase Auth with Row-Level Security (RLS) and A
 | **FR-INT-01:** Intake Whole Asset (Auto / Marine / Equip) | CRUD | Create / Update | Read (Strip Queue) | Read (Exported) | No Access | No Access | No Access |
 | **FR-INT-02:** Strip Part, Bind QR & Scan Bin | CRUD | Create / Relocate | Create / Relocate | No Access | No Access | No Access | No Access |
 | **FR-EXP-01:** Log Expense with Private Receipt | CRUD + Reversal | Create / Read | No Access | Create (Port Fees) | No Access | Create / Read (Cannabis) | Create (Nursery Supplies) |
+| **FR-EXP-02:** Execute Piece-Rate Stripper Payout & Partner Draw (`RULE-PAY-001`–`003`) | CRUD + Approve | Read Own / Float | Read Own Piece-Rate | No Access | No Access | No Access | No Access |
 | **FR-LOG-01:** Scan Parts/Assets to Export Pallet | CRUD | Create / Read | Execute Scan | Read Manifest | Read ("Loading" Tab) | No Access | No Access |
 | **FR-LOG-02:** Seal Pallet & Export Broker Package | CRUD + Seal | Read Packing List | No Access | Read / Download | No Access | No Access | No Access |
 | **FR-CHK-01:** Execute Ontario Domestic Checkout (CAD Walk-In / FB / Kijiji / Lot) | CRUD | Execute (CAD Only) | No Access | No Access | No Access | No Access | No Access |
+| **FR-MKT-02:** 1-Click FB Marketplace / Kijiji Copy & Chrome Extension Autofill | Execute | Execute | No Access | No Access | No Access | No Access | No Access |
 | **FR-VLT-01:** Check-In Landed Shipment to Vault | CRUD | Read Status | No Access | Execute Check-In | No Access | No Access | No Access |
 | **FR-VLT-02:** Create 24h B2B Part/Vehicle Reservation | CRUD | Create (Broker) | No Access | CRUD | Create (Rate-Limited) | No Access | No Access |
 | **FR-VLT-03:** Verify Trinidad Vault COD Payment & Release | Execute (MFA aal2 Required) | **Denied (Hard Lock)** | No Access | **Execute (MFA aal2 Required)** | No Access | No Access | No Access |
@@ -171,10 +173,17 @@ Phase 1 is engineered around the immediate proof-of-concept shipment to Port of 
   3. Blocks moving a deal to `ACQUIRED_IN_TRANSIT` if the bid exceeds $B_{\text{max}}$ or breaches capacity/capital gates without an audit-logged `ARCHITECT_CFO` approval.
 
 #### FR-EXP-01: Receipt-Enforced Expense Subledger & External GL Sync
-* **Description:** Every dollar spent (auction invoice, towing, aftermarket repair parts, shop labor, freight, customs duty, or cannabis nursery/processing supplies and lab CoA fees) must be logged as an `Expense` scoped to an `organizationId` and linked to a `Vehicle`, `Shipment`, or `CannabisLot`.
+* **Description:** Every dollar spent (auction invoice, towing, aftermarket repair parts, shop labor, piece-rate stripping, freight, customs duty, or cannabis nursery/processing supplies and lab CoA fees) must be logged as an `Expense` scoped to an `organizationId` and linked to a `Vehicle`, `Shipment`, or `CannabisLot`.
 * **Acceptance Criteria:**
   * Submitting an expense without a valid `receiptStorageKey` in `R2_PRIVATE_EVIDENCE_BUCKET` fails at both the API validation layer (HTTP `422`) and the PostgreSQL `CHECK` constraint layer.
   * Confirmed expenses and vault sales emit an `OutboxEvent` that syncs the journal entry to QuickBooks Online / Xero via `IAccountingGlPort`.
+
+#### FR-EXP-02: 3-Rule Compensation & Piece-Rate Stripper Payout Gate (`RULE-PAY-001` to `RULE-PAY-003`)
+* **Description:** Enforces strict working-capital discipline on yard stripper labor payouts and founder profit draws so the $20,000 CAD bi-monthly investor buffer is never depleted by unsupervised hourly wages or unreceipted cash draws.
+* **Business Rules:**
+  1. **Rule 1 — Piece-Rate Yard Stripper Payout Gate (`RULE-PAY-001`, `category == 'YARD_STRIPPER_PIECE_RATE'`):** Unskilled yard strippers (`ONTARIO_STRIPPER`) are paid a configurable flat piece-rate per completed vehicle ($300–$400 CAD default) rather than hourly wages. The system blocks logging a `YARD_STRIPPER_PIECE_RATE` expense (`422 PIECE_RATE_GATE_UNMET`) unless `vehicleId` is linked, `Vehicle.fluidsDrainedAt IS NOT NULL`, and at least `minShelvedPartsForStripPayout` (default `35` for `AUTOMOBILE`) child `Part` records for that donor vehicle have reached `custodyState == 'SHELVED_ONTARIO_CONTAINER'` with photos and scanned bin barcodes.
+  2. **Rule 2 — Zero Founder Salaries from Principal Buffer (`RULE-PAY-002`, `category == 'PARTNER_PROFIT_DRAW'`):** Neither partner (`ARCHITECT_CFO`, `HUNTER_MECHANIC`) may draw salary from the $20,000 CAD working-capital principal. Logging a `PARTNER_PROFIT_DRAW` is hard-blocked (`422 INSUFFICIENT_REALIZED_PROFIT_POOL`) if the requested draw exceeds the cumulative realized net profit pool (`DistributableRealizedProfitPoolCadMinor`).
+  3. **Rule 3 — Bi-Weekly Taz Float Offset (`RULE-PAY-003`):** When executing a `PARTNER_PROFIT_DRAW` for `HUNTER_MECHANIC`, the system automatically nets the payout against his current `RunningTazFloat_CAD` (`HELD_BY_TAZ_FLOAT`) balance so unreceipted local cash collected in Ontario is settled before any new corporate cash is disbursed.
 
 ---
 
@@ -228,13 +237,20 @@ Phase 1 is engineered around the immediate proof-of-concept shipment to Port of 
 * **Acceptance Criteria:**
   * Buyers can place a rate-limited 24-hour reservation hold (`B2BReservation` on either a `Part` or a whole `Vehicle`, enforced by partial unique indexes to prevent overlapping active holds) or submit a `PreOrderWishList` request (filtered by `RHD_ONLY` or `UNIVERSAL` `SteeringSideCompatibility`) that automatically alerts the Deal Analyzer when a matching donor vehicle is evaluated in Ontario.
 
+#### FR-MKT-02: Local Marketplace Chrome Extension & 1-Click FB/Kijiji Listing Helper (`extensions/local-marketplace-lister`)
+* **Description:** Because Facebook Marketplace and Kijiji prohibit server-side automated listing bots for individual auto parts and retail vehicles, the platform provides a **1-Click "Copy / Export for FB & Kijiji" helper** in the ERP UI alongside a lightweight **Manifest V3 Chrome Extension** (`extensions/local-marketplace-lister/`) for heavy local Ontario inventory (doors, hoods, subframes, engines, transmissions, and Ramsayville $5,000 beater/rebuilt cars).
+* **Business Rules & Workflow:**
+  1. **ERP Local Ad Payload Endpoint (`/api/marketplace/local-ad-payload/[sku]`):** For any `Part` in `SHELVED_ONTARIO_CONTAINER` or `Vehicle` in `READY_FOR_RETAIL_SALE`, generates a pre-formatted local ad payload containing: SEO Title (`Year Make Model PartName — OEM# [SKU]`), CAD Ask Price (`retailPriceCadMinor`), condition grade, donor VIN/odometer provenance, Ottawa/Ramsayville local pickup instructions, and sanitized `R2_PUBLIC_MEDIA_BUCKET` WebP image URLs.
+  2. **User-Initiated Browser Extension Autofill:** When `ARCHITECT_CFO` or `HUNTER_MECHANIC` opens `facebook.com/marketplace/create/item`, `facebook.com/marketplace/create/vehicle`, or `kijiji.ca/p-post-ad.html` and clicks **"Fill from SKU"** in the Chrome Extension popup, the content script injects the title, price, category, description, and location fields directly into the DOM and provides 1-click drag/drop image staging—reducing local listing time to under 15 seconds with zero account-ban risk.
+  3. **Automatic Sold Sync Reminder:** When a locally listed item is checked out via `/checkout` (`FR-CHK-01`), the post-checkout screen displays a 1-tap reminder to mark the corresponding FB/Kijiji ad as sold while automatically delisting the eBay offer via `OutboxEvent`.
+
 ### 5.1 Phased Delivery Roadmap Alignment (Zero Delay to Trinidad Shipment #1)
 
 | Phase | Target Window | Active Schemas | Core Deliverables & Operational Focus |
 | :--- | :--- | :--- | :--- |
 | **Phase 1A** | Weekend Build (Pre-Vessel Departure) | `shared` + `salvage` | Shared Core (`Organization`, `User`, `StorageLocation`, `Expense`, `CustodyEvent`, R2 buckets, ZPL/QR scanner) + Salvage Intake (`FR-INT-01`, `FR-INT-02`) + Broker Customs Package (`FR-LOG-01`, `FR-LOG-02`) for Trinidad Shipment #1 (Yamaha Jet, Yamaha VR, A/C Machine, Kia/Mazda SUV pallet). |
 | **Phase 1B** | Days 1–14 (During Ocean Transit) | `shared` + `salvage` | Trinidad Vault Check-In (`FR-VLT-01`), Landed Cost & TTD Floor Allocation (`FR-VLT-02`), Adaptive Mobile Checkout (`FR-CHK-01` / `FR-VLT-03`), and FX Repatriation Ledger (`FR-VLT-04`). |
-| **Phase 2A** | Days 31–60 (Post Proof Gate) | `shared` + `salvage` | Offline-first IndexedDB Stripper PWA, Weekly Blind Cycle Counts (`FR-VLT-05`), "Bad Cop" Deal Analyzer (`FR-DEAL-01`), and QuickBooks/Xero GL sync (`FR-EXP-01`). |
+| **Phase 2A** | Days 31–60 (Post Proof Gate) | `shared` + `salvage` | Offline-first IndexedDB Stripper PWA, Weekly Blind Cycle Counts (`FR-VLT-05`), Local FB/Kijiji Chrome Extension (`FR-MKT-02`), "Bad Cop" Deal Analyzer (`FR-DEAL-01`), 3-Rule Compensation & Piece-Rate Gate (`FR-EXP-02`), and QuickBooks/Xero GL sync (`FR-EXP-01`). |
 | **Phase 2B** | Days 45–90 (Brockville/Kemptville Ag Online) | `shared` + `cannabis` | Workspace Switcher, 3-Tap Nursery Clone/Mother Tracking (`FR-CAN-01`), Mass-Balance Extraction Ledger (`FR-CAN-02`), Dual-Witness Destruction (`FR-CAN-03`), and CTLS / CRA B300 Reporting (`FR-CAN-04`) reusing 80% of Phase 1 `shared-ops` infrastructure. |
 | **Phase 3** | Months 3–6 (Scale & Automation) | `shared` + `salvage` + `cannabis` | Assistive AI Vision (`FR-AI-01`), Automated Two-Phase eBay Inventory API Sync, Two-Step HMAC Gate Token exit scanning, and Live Container B2B Storefront (`FR-MKT-01`). |
 

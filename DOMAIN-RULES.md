@@ -33,6 +33,17 @@ To prevent regulatory or market changes from requiring code deployments, the sys
 | **Brake Booster, Master Cylinder & Pedal Box** | `LHD_ONLY` | **Blocked (eBay Only)** | Firewall mounting and brake line routing are side-specific. |
 | **Wiring Harnesses & Cabin/Dash Looms** | `LHD_ONLY` | **Blocked (eBay Only)** | Loom lengths, fuse-box breakouts, and firewall grommets are routed specifically for LHD cockpits. |
 
+### 2.1 Multi-Channel Domestic & Export Channel Routing Matrix (`RULE-MKT-001`)
+
+To maximize net margin and velocity while avoiding platform bot bans, inventory is routed across sales channels based on physical weight, steering-side compatibility, and buyer geography:
+
+| Inventory Class | Primary Sales Channel(s) | Listing & Syndication Mechanism | Fee & Logistics Rationale |
+| :--- | :--- | :--- | :--- |
+| **Small / Light Electronics & `LHD_ONLY` Parts (`< 15 kg`: ECUs, radar sensors, clusters, switches, steering racks, headlamps)** | `EBAY_MOTORS_SHIPPED` | Automated eBay Inventory API + Browse API comp floor (`FR-AI-01`) | High North American demand; easy to box and ship via courier despite `13.25%` platform fee. |
+| **Heavy / Bulky Domestic Parts (`>= 15 kg`: doors, hoods, bumpers, subframes, engines, transmissions)** | `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL`, `OTTAWA_WALK_IN_CASH` | **Manifest V3 Chrome Extension (`FR-MKT-02`)** autofilling Facebook Marketplace & Kijiji forms from `/api/marketplace/local-ad-payload/[sku]` | `0%` platform fee; eliminates `$150–$400` LTL freight/crating headaches via Ottawa/Ramsayville local pickup. |
+| **Quick-Turn $5,000 Beaters & Rebuilt Salvage Cars (`RAMS` Lot)** | `RAMSAYVILLE_LOT_RETAIL`, `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL` | Chrome Extension Vehicle Autofill (`FR-MKT-02`) + Physical Ramsayville 8-car retail lot | Turns Canadian cash every 7–14 days (`0%` fee) with mandatory DriveON SSC & signed Bill of Sale (`FR-CHK-01`). |
+| **`UNIVERSAL` SUV Assemblies, Watercraft & Shop Equipment (`TT_POS`)** | `TRINIDAD_VAULT_COD`, `TRINIDAD_PRE_ORDER_PICKUP` | Two-Tab "Live Container" B2B Storefront (`FR-MKT-01`) + WhatsApp B2B Alerts | Captures Caribbean arbitrage margin via Family Bonded Vault with `0` third-party rent and strict MFA `aal2` COD release (`FR-VLT-03`). |
+
 ---
 
 ## 3. Harmonized System (HS) Tariff & Customs Valuation Register
@@ -125,6 +136,13 @@ All configurable parameters live in `src/core/config/pricing-policy.json` and ca
     "kemptvilleContainerCount": 4,
     "ramsayvilleMaxActiveShopVehicles": 8
   },
+  "compensationRules": {
+    "workingCapitalPrincipalBufferCadMinor": 2000000,
+    "stripperPieceRatePerVehicleCadMinor": 35000,
+    "minShelvedPartsForStripPayout": 35,
+    "allowFounderDrawFromPrincipalBuffer": false,
+    "autoOffsetHunterDrawAgainstFloat": true
+  },
   "cannabisCompliance": {
     "wetToDryMoistureLossMinPct": 0.72,
     "wetToDryMoistureLossMaxPct": 0.80,
@@ -195,6 +213,25 @@ All configurable parameters live in `src/core/config/pricing-policy.json` and ca
 5. **Tier 3 — Repatriated Cash Return (Settled CAD):**
    * Actual hard CAD settled in the Canadian corporate bank account via `CurrencySettlement` (`totalTargetSettledMinor` net of `fxSlippageLossCadMinor`) divided by total CAD cash deployed into the shipment:
    $$\text{RepatriatedCashROI} = \frac{\sum \text{CurrencySettlement.totalTargetSettledCadMinor}}{\text{TotalDeployedShipmentCash}_{\text{CAD}}}$$
+
+### 4.5 The 3-Rule Compensation & Piece-Rate Payout Protocol (`RULE-PAY-001` to `RULE-PAY-003`)
+
+To prevent working-capital burn on unsupervised yard labor or premature founder draws, the subledger enforces three mathematical gates:
+
+1. **Rule `RULE-PAY-001` (Piece-Rate Yard Stripper Payout Gate — `YARD_STRIPPER_PIECE_RATE`):**
+   * Unskilled yard labor is compensated per completed vehicle (`stripperPieceRatePerVehicleCadMinor`, default `$350.00 CAD` / `$300–$400 CAD` range) rather than hourly wages.
+   * A donor `Vehicle` ($v$) is eligible for a `YARD_STRIPPER_PIECE_RATE` expense payout if and only if:
+     $$\text{Vehicle}_v.\text{fluidsDrainedAt} \neq \text{NULL} \quad \land \quad \left|\left\{ p \in \text{Parts}(v) \;\middle|\; p.\text{custodyState} = \text{'SHELVED\_ONTARIO\_CONTAINER'} \land |p.\text{rawPhotoUrls}| \ge 1 \right\}\right| \ge N_{\text{min\_shelved}}$$
+     where $N_{\text{min\_shelved}} = 35$ (`minShelvedPartsForStripPayout` for `AUTOMOBILE`).
+2. **Rule `RULE-PAY-002` (Principal Buffer Protection — Zero Founder Salaries from the $20k Buffer):**
+   * The `$20,000 CAD` bi-monthly investor capital buffer (`workingCapitalPrincipalBufferCadMinor`) is strictly reserved for inventory acquisition, repair parts, piece-rate stripping, and freight/customs.
+   * Founder profit draws (`category == 'PARTNER_PROFIT_DRAW'`) may only be disbursed when cumulative realized net profit across completed sales exceeds cumulative expenses and prior draws:
+     $$\text{DistributableRealizedProfitPool}_{\text{CAD}} = \sum \text{SaleTransaction.netRealizedCadMinor}_{\text{settled}} + \sum \text{Vehicle.scrapRecoveryCadMinor} - \sum \text{Expense.amountCadMinor}_{\text{settled}}$$
+     $$\text{RequestedPartnerDraw}_{\text{CAD}} \le \max\left(0,\; \text{DistributableRealizedProfitPool}_{\text{CAD}}\right)$$
+3. **Rule `RULE-PAY-003` (Bi-Weekly Taz Float Offset on Partner Draws):**
+   * When disbursing an approved `PARTNER_PROFIT_DRAW` ($\text{DrawApproved}_{\text{CAD}}$) to `HUNTER_MECHANIC`, any positive cash balance currently held in `RunningTazFloat_CAD` (`HELD_BY_TAZ_FLOAT`) is deducted first:
+     $$\text{FloatOffsetApplied}_{\text{CAD}} = \min\left(\text{DrawApproved}_{\text{CAD}},\; \max(0, \text{RunningTazFloat}_{\text{CAD}})\right)$$
+     $$\text{NetCashDisbursedFromBank}_{\text{CAD}} = \text{DrawApproved}_{\text{CAD}} - \text{FloatOffsetApplied}_{\text{CAD}}$$
 
 ---
 

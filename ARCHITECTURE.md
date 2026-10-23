@@ -26,6 +26,7 @@ This platform is a **Unified Multi-Tenant Domain-Driven Design (DDD) Modular Mon
 
 * **Runtime & Application Framework:** Next.js 15+ (App Router), React 19, Node.js v22 LTS, TypeScript 5.x (`strict: true`).
 * **Mobile Offline Client (PWA):** Workbox Service Workers, IndexedDB (`Dexie.js`) for offline mutation queues and binary image blobs, `@zxing/browser` + native `BarcodeDetector` API.
+* **Local Marketplace Browser Extension (`extensions/local-marketplace-lister/`):** Manifest V3 Chrome/Chromium Extension that reads structured listing payloads and sanitized WebP images from the ERP API (`/api/marketplace/local-ad-payload/[sku]`) and autofills Facebook Marketplace and Kijiji listing forms via user-initiated DOM injection (bypassing server-side anti-bot blocks).
 * **Database & ORM:** PostgreSQL 16+ (Supabase) with Multi-Schema isolation (`schemas = ["shared", "salvage", "cannabis"]`), Row-Level Security (RLS), connection pooling, and Prisma ORM (`previewFeatures = ["multiSchema"]`).
 * **Queue & Background Workers:** BullMQ backed by Redis 7.x (running in standalone Node.js worker process).
 * **Object Storage:** Cloudflare R2:
@@ -71,7 +72,9 @@ src/
 │   ├── db/                        # Prisma multi-schema client, migrations, RLS helpers
 │   ├── adapters/                  # Concrete implementations of core/ports
 │   └── workers/                   # BullMQ worker entrypoints
-└── app/                           # Next.js App Router (Workspace Switcher, UI, Server Actions)
+├── app/                           # Next.js App Router (Workspace Switcher, UI, Server Actions)
+└── extensions/
+    └── local-marketplace-lister/  # Manifest V3 Chrome Extension for 1-click FB Marketplace & Kijiji autofill
 ```
 
 ---
@@ -126,6 +129,7 @@ enum ExpenseCategory {
   AUCTION_PURCHASE_PRICE
   AUCTION_BUYER_FEE
   TOWING_AND_RECOVERY
+  YARD_STRIPPER_PIECE_RATE            // Per-car piece-rate payout ($300-$400 CAD) gated by RULE-PAY-001
   RAMSAYVILLE_SHOP_LABOR
   AFTERMARKET_REPAIR_PARTS
   OEM_REBUILD_PARTS
@@ -141,6 +145,7 @@ enum ExpenseCategory {
   LAB_COA_TESTING_FEE
   PROCESSING_SOLVENTS_AND_CONSUMABLES
   EXCISE_STAMP_AND_DUTY
+  PARTNER_PROFIT_DRAW                 // Realized-profit partner draw gated by RULE-PAY-002 & RULE-PAY-003
 
   @@schema("shared")
 }
@@ -1053,8 +1058,12 @@ model CannabisDestructionLog {
 Prisma does not natively express `CHECK` constraints, immutable triggers, or Row-Level Security policies. The initial migration MUST include:
 
 ```sql
--- 1. Enforce non-empty private receipt/slip keys on shared.Expense and shared.CashCustodyTransfer
+-- 1. Enforce non-empty private receipt/slip keys on shared.Expense and shared.CashCustodyTransfer,
+--    and require donor vehicleId linkage on YARD_STRIPPER_PIECE_RATE payouts (RULE-PAY-001)
 ALTER TABLE "shared"."Expense" ADD CONSTRAINT expense_receipt_non_empty CHECK (length(trim("receiptStorageKey")) > 0);
+ALTER TABLE "shared"."Expense" ADD CONSTRAINT piece_rate_requires_donor_vehicle CHECK (
+  "category" != 'YARD_STRIPPER_PIECE_RATE' OR "vehicleId" IS NOT NULL
+);
 ALTER TABLE "shared"."CashCustodyTransfer" ADD CONSTRAINT transfer_slip_non_empty CHECK (length(trim("depositSlipStorageKey")) > 0);
 
 -- 2. Enforce Commission Holdback Invariant at DB level
@@ -1247,6 +1256,17 @@ The unified mobile checkout workflow (`/checkout`) adapts dynamically based on t
    * If $|\text{UnaccountedVariance}_{\text{g}}| / \text{InputWeight}_{\text{g}} > 2.0\%$ (`RULE-CAN-001`), the transaction atomically flags `varianceAlertFlagged = true`, sets `CannabisLot.complianceHold = true` on the target lot, and emits an `OutboxEvent` (`CannabisVarianceAlert`) requiring `CANNABIS_QAP_COMPLIANCE` sign-off (`verifiedByQapUserId`) before the lot can be moved or packaged.
 2. **Dual-Witness Destruction (`CannabisDestructionLog`):**
    * Any plant cull or processing waste destruction (`wasteDestroyedGrams > 0` or `plantsDestroyedCount > 0`) requires an immutable `CannabisDestructionLog` entry containing a private timestamped photo (`evidencePhotoStorageKey` in `R2_PRIVATE_EVIDENCE_BUCKET`) and two distinct authenticated user signatures (`primaryUserId != witnessUserId`), where at least one witness holds `CANNABIS_QAP_COMPLIANCE` or `ARCHITECT_CFO` authority.
+
+### 5.5 3-Rule Compensation & Piece-Rate Payout Protocol (`RULE-PAY-001` to `RULE-PAY-003`)
+
+To prevent working-capital bleed on unsupervised yard labor and partner draws, `src/modules/cfo-subledger` enforces three domain guards before committing compensation `Expense` records:
+
+1. **Piece-Rate Yard Stripper Payout Gate (`RULE-PAY-001` — `category == 'YARD_STRIPPER_PIECE_RATE'`):**
+   * Unskilled rural yard labor is paid per completed vehicle rather than hourly. Logging a `YARD_STRIPPER_PIECE_RATE` expense requires a linked `vehicleId` (enforced by SQL `CHECK` constraint `piece_rate_requires_donor_vehicle`), `Vehicle.fluidsDrainedAt != null`, and at least `minShelvedPartsForStripPayout` (default `35` for `AUTOMOBILE`) child `Part` records bound to that `donorVehicleId` in `custodyState == 'SHELVED_ONTARIO_CONTAINER'` (with QR code, $\ge 1$ photo, and scanned container bin).
+2. **Principal Buffer Protection (`RULE-PAY-002` — `category == 'PARTNER_PROFIT_DRAW'`):**
+   * Neither founder (`ARCHITECT_CFO`, `HUNTER_MECHANIC`) may draw salary from the $20,000 CAD bi-monthly investor working-capital principal. The domain service blocks `PARTNER_PROFIT_DRAW` if `requestedDrawCadMinor > DistributableRealizedProfitPoolCadMinor` (cumulative realized net profit across completed sales minus unrecovered expenses and prior partner draws).
+3. **Bi-Weekly Taz Float Offset (`RULE-PAY-003`):**
+   * Whenever a `PARTNER_PROFIT_DRAW` is executed for `HUNTER_MECHANIC` while `RunningTazFloat_CAD > 0` (`HELD_BY_TAZ_FLOAT`), the system automatically nets the draw against the outstanding float balance first (recording the float settlement in the same transaction) so unreceipted shop cash never becomes unrecorded bonus pay.
 
 ## 6. Hexagonal Ports Specification (`src/core/ports/index.ts`)
 
