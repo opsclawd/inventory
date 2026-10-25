@@ -159,6 +159,14 @@ enum AccountingSyncStatus {
   @@schema("shared")
 }
 
+enum ReceiptVerificationState {
+  VERIFIED_RECEIPT        // Standard receipt photo uploaded to R2_PRIVATE_EVIDENCE_BUCKET
+  PETTY_CASH_VOUCHER      // Under-$50 CAD unreceipted voucher (capped at $250/mo per operator) with mandatory voucherReason
+  PENDING_RECEIPT_UPLOAD  // Temporary unverified operator float hold awaiting receipt photo upload
+
+  @@schema("shared")
+}
+
 enum SaleMarketNode {
   DOMESTIC_ORIGIN           // Kemptville Yard / Ramsayville Shop / Local Pickup
   DESTINATION_EXPORT_VAULT  // Port of Spain Family Warehouse / Export Destination Vault
@@ -221,6 +229,7 @@ model User {
   salesExecuted           SaleTransaction[]           @relation("SoldByUser")
   brokeredSales           SaleTransaction[]           @relation("BrokerUser")
   verifiedSales           SaleTransaction[]           @relation("VerifiedByAdmin")
+  cfoOverrideSales        SaleTransaction[]           @relation("CfoOverrideApprover")
   cashTransfersRecorded   CashCustodyTransfer[]       @relation("TransferRecordedByUser")
   cycleCountTasks         CycleCountTask[]            @relation("AssignedVaultAdmin")
   wishLists               PreOrderWishList[]
@@ -324,10 +333,12 @@ model Expense {
   isReversalEntry       Boolean              @default(false)
   reversesExpenseId     String?              @db.Uuid
 
-  // Private Evidence (Stored in R2_PRIVATE_EVIDENCE_BUCKET)
-  receiptStorageKey     String               // Non-empty DB CHECK constraint enforced in migration
-  receiptSha256Hash     String
-  receiptOcrJson        Json?
+  // Tiered Receipt & Voucher Evidence (Stored in R2_PRIVATE_EVIDENCE_BUCKET when VERIFIED_RECEIPT)
+  receiptVerificationState ReceiptVerificationState @default(VERIFIED_RECEIPT)
+  receiptStorageKey        String?                  // Mandatory when receiptVerificationState == VERIFIED_RECEIPT
+  receiptSha256Hash        String?
+  voucherReason            String?                  // Mandatory (>= 5 chars) when PETTY_CASH_VOUCHER or PENDING_RECEIPT_UPLOAD
+  receiptOcrJson           Json?
 
   // External Accounting Subledger Sync
   accountingSyncStatus  AccountingSyncStatus @default(PENDING_SYNC)
@@ -815,25 +826,32 @@ model SaleTransaction {
   verifiedByAdmin         User                 @relation("VerifiedByAdmin", fields: [verifiedByAdminId], references: [id])
 
   // Financial Totals (Minor Units / Cents)
-  paymentCurrency         CurrencyCode         // CAD (Origin) or TTD/USD (Destination)
-  subtotalMinor           Int
-  platformFeeMinor        Int                  @default(0) // $0 for FB/Walk-In; ~13.25% for EBAY_MOTORS_SHIPPED
-  shippingCostMinor       Int                  @default(0) // $0 for Local Pickup; Courier label cost for eBay
-  taxOrVatMinor           Int                  @default(0)
-  grossCollectedMinor     Int
-  netRealizedCadMinor     Int                  // (gross - platformFee - shipping) in CAD for VIN Break-Even math
-  paymentMethod           String               // "CASH", "INTERAC_ETRANSFER", "VERIFIED_BANK_WIRE", "EBAY_MANAGED_PAYOUT"
-  cashCustodyState        CashCustodyState
+  paymentCurrency                     CurrencyCode         // CAD (Origin) or TTD/USD (Destination)
+  floorPriceAtCheckoutMinor           Int?                 // Snapshot of item(s) floor price at moment of sale for auditability
+  subtotalMinor                       Int
+  discountAmountMinor                 Int                  @default(0) // max(0, floorPriceAtCheckoutMinor - grossCollectedMinor)
+  discountReasonCode                  String?              // "CASH_ROUNDING" | "BUNDLE_DISCOUNT" | "TRANSIT_OR_SHOP_DAMAGE" | "AGED_INVENTORY_CLEARANCE" | "CFO_CUSTOM_OVERRIDE"
+  cfoOverrideApprovedById             String?              @db.Uuid    // Populated when discount exceeds Admin Corridor and is overridden by ARCHITECT_CFO
+  cfoOverrideApprovedBy               User?                @relation("CfoOverrideApprover", fields: [cfoOverrideApprovedById], references: [id])
+  cfoOverrideReasonNote               String?
+  platformFeeMinor                    Int                  @default(0) // $0 for FB/Walk-In; ~13.25% for EBAY_MOTORS_SHIPPED
+  shippingCostMinor                   Int                  @default(0) // $0 for Local Pickup; Courier label cost for eBay
+  taxOrVatMinor                       Int                  @default(0)
+  grossCollectedMinor                 Int
+  netRealizedCadMinor                 Int                  // (gross - platformFee - shipping) in CAD for VIN Break-Even & Self-Funding Pool math
+  paymentMethod                       String               // "CASH", "INTERAC_ETRANSFER", "VERIFIED_BANK_WIRE", "EBAY_MANAGED_PAYOUT"
+  cashCustodyState                    CashCustodyState
 
   // Private Evidence (Stored in R2_PRIVATE_EVIDENCE_BUCKET)
-  paymentProofStorageKey  String               // Photo of cash, e-Transfer screenshot, or wire slip (Mandatory)
-  billOfSaleStorageKey    String?              // Mandatory when domesticChannel == RETAIL_LOT_VEHICLE_SALE
-  ttdCommercialBankName   String?
+  paymentProofStorageKey              String               // Photo of cash, e-Transfer screenshot, or wire slip (Mandatory)
+  billOfSaleStorageKey                String?              // Mandatory when domesticChannel == RETAIL_LOT_VEHICLE_SALE
+  ttdCommercialBankName               String?
 
-  // Broker Commission (Trinidad / Overseas B2B only)
-  brokerCommissionBps     Int                  @default(0)
-  brokerCommissionMinor   Int                  @default(0)
-  brokerCommissionPaidAt  DateTime?
+  // Broker Commission & Counter Netting (Destination / Overseas B2B)
+  brokerCommissionBps                 Int                  @default(0)
+  brokerCommissionMinor               Int                  @default(0)
+  isBrokerCommissionDeductedAtCounter Boolean              @default(false) // When true, physical cash added to HELD_IN_DESTINATION_VAULT is grossCollectedMinor - brokerCommissionMinor
+  brokerCommissionPaidAt              DateTime?
 
   // Gate Release Lock (Phase 1-2: stamped atomically upon payment verification; Phase 3: two-step HMAC Gate Token)
   isPaymentVerified       Boolean              @default(false)
@@ -1062,9 +1080,13 @@ model CannabisDestructionLog {
 Prisma does not natively express `CHECK` constraints, immutable triggers, or Row-Level Security policies. The initial migration MUST include:
 
 ```sql
--- 1. Enforce non-empty private receipt/slip keys on shared.Expense and shared.CashCustodyTransfer,
+-- 1. Enforce tiered receipt/voucher rules on shared.Expense, non-empty slip key on shared.CashCustodyTransfer,
 --    and require donor vehicleId linkage on YARD_STRIPPER_PIECE_RATE payouts (RULE-PAY-001)
-ALTER TABLE "shared"."Expense" ADD CONSTRAINT expense_receipt_non_empty CHECK (length(trim("receiptStorageKey")) > 0);
+ALTER TABLE "shared"."Expense" ADD CONSTRAINT expense_receipt_or_voucher_check CHECK (
+  ("receiptVerificationState" = 'VERIFIED_RECEIPT' AND "receiptStorageKey" IS NOT NULL AND length(trim("receiptStorageKey")) > 0)
+  OR
+  ("receiptVerificationState" IN ('PETTY_CASH_VOUCHER', 'PENDING_RECEIPT_UPLOAD') AND "voucherReason" IS NOT NULL AND length(trim("voucherReason")) >= 5)
+);
 ALTER TABLE "shared"."Expense" ADD CONSTRAINT piece_rate_requires_donor_vehicle CHECK (
   "category" != 'YARD_STRIPPER_PIECE_RATE' OR "vehicleId" IS NOT NULL
 );
@@ -1092,12 +1114,13 @@ CREATE TRIGGER lock_cash_transfer_delete BEFORE DELETE ON "shared"."CashCustodyT
 CREATE TRIGGER lock_cannabis_destruction_log BEFORE UPDATE OR DELETE ON "cannabis"."CannabisDestructionLog" FOR EACH ROW EXECUTE FUNCTION prevent_audit_tampering();
 CREATE TRIGGER lock_cannabis_transformation_delete BEFORE DELETE ON "cannabis"."CannabisLotTransformation" FOR EACH ROW EXECUTE FUNCTION prevent_audit_tampering();
 
--- 4b. Block mutation of immutable financial columns on shared.Expense & salvage.SaleTransaction while permitting workflow/void updates
+-- 4b. Block mutation of immutable financial columns on shared.Expense & salvage.SaleTransaction while permitting
+--     attaching a receipt to a PENDING_RECEIPT_UPLOAD expense or voiding a SaleTransaction
 CREATE OR REPLACE FUNCTION prevent_expense_financial_mutation() RETURNS TRIGGER AS $$
 BEGIN
   IF NEW."amountOriginalMinor" IS DISTINCT FROM OLD."amountOriginalMinor"
      OR NEW."amountCadMinor" IS DISTINCT FROM OLD."amountCadMinor"
-     OR NEW."receiptStorageKey" IS DISTINCT FROM OLD."receiptStorageKey" THEN
+     OR (OLD."receiptStorageKey" IS NOT NULL AND NEW."receiptStorageKey" IS DISTINCT FROM OLD."receiptStorageKey") THEN
     RAISE EXCEPTION 'Immutable financial columns on Expense cannot be modified after creation; log a reversal entry instead.';
   END IF;
   RETURN NEW;
@@ -1244,12 +1267,17 @@ The unified mobile checkout workflow (`/checkout`) adapts dynamically based on t
    * **Context & Channel Attribution:** Triggered when `HUNTER_MECHANIC` or `ARCHITECT_CFO` scans a `PRT-XXXXXX` part or `AST-XXXXXX` whole vehicle located in Ontario (`KEMP` or `RAMS`). The UI defaults to `CAD` and presents `DomesticSaleChannel` selector pills (`LOCAL_WALK_IN_CASH`, `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL`, `RETAIL_LOT_VEHICLE_SALE`, `WHOLESALE_MECHANIC_NETWORK`).
    * **Immediate eBay Delist Outbox:** If any sold part is currently active on eBay (`ebaySyncState == 'SYNDICATED_LIVE'`), the checkout transaction atomically transitions the part to `custodyState = 'SOLD_AND_RELEASED'`, `availabilityState = 'PAID_SETTLED'`, and writes an `OutboxEvent` (`PartSoldLocallyDelistEbayRequested`) to immediately zero out the eBay Motors offer, preventing online double-sales.
    * **Operator Float & Cash Custody Tracking:** Cash collected in person sets `cashCustodyState = 'HELD_IN_OPERATOR_FLOAT'`, creating an auditable shop petty-cash float that can be drawn down when logging shop `Expense` receipts (`paidFromCashCustody = 'HELD_IN_OPERATOR_FLOAT'`). Interac e-Transfers and wires default to `SETTLED_ORIGIN_CORP_BANK`.
-   * **Whole-Vehicle Lot Release & Break-Even Velocity:** Whole-vehicle retail sales (`RETAIL_LOT_VEHICLE_SALE`) enforce uploading a signed Bill of Sale (`billOfSaleStorageKey`), transition the `Vehicle` to `lifecycleState = 'SOLD_RETAIL_ONTARIO'` and `availabilityState = 'PAID_SETTLED'` (freeing 1 of the 8 Ramsayville shop lot slots), and credit `netRealizedCadMinor` (`grossCollectedMinor - platformFeeMinor - shippingCostMinor`) toward the donor VIN's Break-Even Velocity counter and the $20k Capital Buffer. Because there is no separate warehouse security gate in Ontario, `isPaymentVerified` is set to `true` and `gateReleasedAt = now()` upon receipt upload.
+   * **Whole-Vehicle Lot Release & Self-Funding Working Capital Credit:** Whole-vehicle retail sales (`RETAIL_LOT_VEHICLE_SALE`) enforce uploading a signed Bill of Sale (`billOfSaleStorageKey`), transition the `Vehicle` to `lifecycleState = 'SOLD_RETAIL_ONTARIO'` and `availabilityState = 'PAID_SETTLED'` (freeing 1 of the 8 Ramsayville shop lot slots), and credit `netRealizedCadMinor` (`grossCollectedMinor - platformFeeMinor - shippingCostMinor`) toward the donor VIN's Break-Even Velocity counter and the **Self-Funding Working Capital Pool** (`AvailableWorkingCapital_CAD`). Because there is no separate warehouse security gate in Ontario, `isPaymentVerified` is set to `true` and `gateReleasedAt = now()` upon receipt upload.
 2. **Destination Export Vault Mode (`marketNode == 'DESTINATION_EXPORT_VAULT'`):**
    * **Strict Separation of Duties & MFA `aal2` Enforcement:** Users with `HUNTER_MECHANIC` or `OVERSEAS_B2B_BUYER` roles are hard-blocked at the API and RLS layers from mutating `SaleTransaction.isPaymentVerified` when `marketNode == 'DESTINATION_EXPORT_VAULT'`. Only `TRINIDAD_VAULT_ADMIN` or `ARCHITECT_CFO` holding an active Supabase Auth JWT with Authenticator Assurance Level 2 (`aal2`) can verify payment.
+   * **3-Tier Price Floor Evaluation & Negotiation Corridor (`checkoutPolicy`):**
+     1. **Tier 1 (At or Above Floor):** `grossCollectedMinor >= floorPriceAtCheckoutMinor` $\rightarrow$ Passes automatically (`discountReasonCode = null`).
+     2. **Tier 2 (Within Admin Negotiation Corridor):** Discount is $\le \min(\text{vaultAdminMaxDiscountCapTtdMinor}, \max(\text{vaultAdminSmallRoundingAllowanceTtdMinor}, \text{floorPriceAtCheckoutMinor} \times 0.08))$ $\rightarrow$ Permitted for `TRINIDAD_VAULT_ADMIN` (or `HUNTER_MECHANIC` in Ontario under `domesticAdminDiscountToleranceBps`) **if and only if** a valid `discountReasonCode` (`"CASH_ROUNDING" | "BUNDLE_DISCOUNT" | "TRANSIT_OR_SHOP_DAMAGE" | "AGED_INVENTORY_CLEARANCE"`) is selected.
+     3. **Tier 3 (Beyond Admin Corridor — Hard Lock / CFO Override Required):** Discount exceeds the Admin Corridor $\rightarrow$ Throws `FLOOR_PRICE_OVERRIDE_REQUIRED` unless `actorRole === 'ARCHITECT_CFO'` or a valid `cfoOverrideApprovedById` + `cfoOverrideReasonNote` is supplied.
+   * **Broker Commission Counter Netting (`isBrokerCommissionDeductedAtCounter`):** When `isBrokerCommissionDeductedAtCounter == true`, the system records that the broker retained their commission directly from the cash handed over at the counter, so the physical cash added to `HELD_IN_DESTINATION_VAULT` is `grossCollectedMinor - brokerCommissionMinor`, keeping physical vault safe cash 100% accurate.
    * **Encrypted FIU Customer Due Diligence (CDD) Storage:** When a single or linked transaction totals $\ge \text{TT\$50,000}$, the checkout requires uploading a private photo/scan of the buyer's government ID (`buyerIdDocumentStorageKey` in `R2_PRIVATE_EVIDENCE_BUCKET`) and storing the AES-256-GCM application-encrypted ID type and number (`buyerIdNumberEncrypted`) so records can be produced during a statutory Trinidad FIU audit.
    * **Phased Gate Release vs. Weekly Blind Cycle Counts:**
-     * **Phase 1 & 2 (Atomic Checkout Release + Weekly Blind Cycle Counts):** While the Vault counter and exit gate are operated by the same team, verifying full payment (`grossCollectedMinor >= sum(vaultFloorPriceTtdMinor)`) and uploading payment proof atomically stamps `isPaymentVerified = true`, `gateReleasedAt = now()`, and transitions child parts to `custodyState = 'SOLD_AND_RELEASED'` (and whole assets to `lifecycleState = 'SOLD_EXPORT_COD'`). Physical shrinkage and off-book cash sales are policed via **Weekly Blind Cycle Counts (`CycleCountTask`)** (sampling up to 10 random `SHELVED_DESTINATION_VAULT` items per week requiring a physical shelf QR scan + live timestamped photo) reconciled against TTD bank deposit slips.
+     * **Phase 1 & 2 (Atomic Checkout Release + Weekly Blind Cycle Counts):** While the Vault counter and exit gate are operated by the same team, verifying payment (passing the 3-Tier Price Floor check) and uploading payment proof atomically stamps `isPaymentVerified = true`, `gateReleasedAt = now()`, and transitions child parts to `custodyState = 'SOLD_AND_RELEASED'` (and whole assets to `lifecycleState = 'SOLD_EXPORT_COD'`). Physical shrinkage and off-book cash sales are policed via **Weekly Blind Cycle Counts (`CycleCountTask`)** (sampling up to 10 random `SHELVED_DESTINATION_VAULT` items per week requiring a physical shelf QR scan + live timestamped photo) reconciled against TTD bank deposit slips.
      * **Phase 3+ (Two-Step HMAC-SHA256 Gate Token):** Once dedicated exit gate guards are staffed separately from the payment desk, payment verification issues a single-use HMAC-SHA256 QR token (`gateTokenNonce`, valid for 4 hours), and scanning the token at the exit door atomically stamps `gateReleasedAt = now()` (returning HTTP `410 Gone` on replay).
 
 ### 5.4 Cannabis Mass-Balance Transformation & Dual-Witness Destruction Protocol
@@ -1267,8 +1295,8 @@ To prevent working-capital bleed on unsupervised yard labor and partner draws, `
 
 1. **Piece-Rate Yard Stripper Payout Gate (`RULE-PAY-001` — `category == 'YARD_STRIPPER_PIECE_RATE'`):**
    * Unskilled rural yard labor is paid per completed vehicle rather than hourly. Logging a `YARD_STRIPPER_PIECE_RATE` expense requires a linked `vehicleId` (enforced by SQL `CHECK` constraint `piece_rate_requires_donor_vehicle`), `Vehicle.fluidsDrainedAt != null`, and at least `minShelvedPartsForStripPayout` (default `35` for `AUTOMOBILE`) child `Part` records bound to that `donorVehicleId` in `custodyState == 'SHELVED_ORIGIN_CONTAINER'` (with QR code, $\ge 1$ photo, and scanned container bin).
-2. **Principal Buffer Protection (`RULE-PAY-002` — `category == 'PARTNER_PROFIT_DRAW'`):**
-   * Neither founder (`ARCHITECT_CFO`, `HUNTER_MECHANIC`) may draw salary from the $20,000 CAD bi-monthly investor working-capital principal. The domain service blocks `PARTNER_PROFIT_DRAW` if `requestedDrawCadMinor > DistributableRealizedProfitPoolCadMinor` (cumulative realized net profit across completed sales minus unrecovered expenses and prior partner draws).
+2. **Self-Funding Seed Capital Protection (`RULE-PAY-002` — `category == 'PARTNER_PROFIT_DRAW'`):**
+   * Neither founder (`ARCHITECT_CFO`, `HUNTER_MECHANIC`) may draw salary from the one-time initial seed capital pool (`initialSeedCapitalCadMinor`). The domain service blocks `PARTNER_PROFIT_DRAW` if `requestedDrawCadMinor > DistributableRealizedProfitPoolCadMinor` (cumulative realized net profit across completed domestic and repatriated export sales minus unrecovered expenses and prior partner draws).
 3. **Bi-Weekly Operator Float Offset (`RULE-PAY-003`):**
    * Whenever a `PARTNER_PROFIT_DRAW` is executed for `HUNTER_MECHANIC` while `RunningOperatorFloat_CAD > 0` (`HELD_IN_OPERATOR_FLOAT`), the system automatically nets the draw against the outstanding float balance first (recording the float settlement in the same transaction) so unreceipted shop cash never becomes unrecorded bonus pay.
 
@@ -1310,16 +1338,38 @@ export interface PricingAndCompliancePolicy {
     cbsaCersValueThresholdCadMinor: number;
     cbsaMarineCutoffHours: number;
   };
+  operationalGates: {
+    workingCapitalGate: {
+      enabled: boolean;
+      enforcementMode: 'HARD_BLOCK' | 'WARN_ONLY' | 'DISABLED';
+      initialSeedCapitalCadMinor: number;
+      minCashReserveFloorCadMinor: number;
+      countPendingExportCashAsAvailable: boolean;
+    };
+    locationCapacityGate: {
+      enforcementMode: 'HARD_BLOCK' | 'WARN_ONLY' | 'DISABLED';
+    };
+  };
+  expensePolicy: {
+    pettyCashVoucherMaxCadMinor: number;
+    monthlyUnreceiptedVoucherCapCadMinor: number;
+  };
+  checkoutPolicy: {
+    checkoutStrictnessMode: 'BONDED_VAULT_STRICT' | 'AUDIT_ENFORCED' | 'STANDARD_POS';
+    vaultAdminDiscountToleranceBps: number;
+    vaultAdminSmallRoundingAllowanceTtdMinor: number;
+    vaultAdminMaxDiscountCapTtdMinor: number;
+    domesticAdminDiscountToleranceBps: number;
+  };
   siteZoningLimits: {
     kemptvilleMaxUncrushedShellsOnPad: number;
     kemptvilleContainerCount: number;
     ramsayvilleMaxActiveShopVehicles: number;
   };
   compensationRules: {
-    workingCapitalPrincipalBufferCadMinor: number;
     stripperPieceRatePerVehicleCadMinor: number;
     minShelvedPartsForStripPayout: number;
-    allowFounderDrawFromPrincipalBuffer: boolean;
+    allowFounderDrawFromSeedCapital: boolean;
     autoOffsetHunterDrawAgainstFloat: boolean;
   };
   cannabisCompliance: {

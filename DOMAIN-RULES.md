@@ -131,16 +131,38 @@ All configurable parameters live in `src/core/config/pricing-policy.json` and ca
     "cbsaCersValueThresholdCadMinor": 200000,
     "cbsaMarineCutoffHours": 48
   },
+  "operationalGates": {
+    "workingCapitalGate": {
+      "enabled": true,
+      "enforcementMode": "HARD_BLOCK",
+      "initialSeedCapitalCadMinor": 3500000,
+      "minCashReserveFloorCadMinor": 750000,
+      "countPendingExportCashAsAvailable": false
+    },
+    "locationCapacityGate": {
+      "enforcementMode": "HARD_BLOCK"
+    }
+  },
+  "expensePolicy": {
+    "pettyCashVoucherMaxCadMinor": 5000,
+    "monthlyUnreceiptedVoucherCapCadMinor": 25000
+  },
+  "checkoutPolicy": {
+    "checkoutStrictnessMode": "BONDED_VAULT_STRICT",
+    "vaultAdminDiscountToleranceBps": 800,
+    "vaultAdminSmallRoundingAllowanceTtdMinor": 10000,
+    "vaultAdminMaxDiscountCapTtdMinor": 75000,
+    "domesticAdminDiscountToleranceBps": 1000
+  },
   "siteZoningLimits": {
     "kemptvilleMaxUncrushedShellsOnPad": 4,
     "kemptvilleContainerCount": 4,
     "ramsayvilleMaxActiveShopVehicles": 8
   },
   "compensationRules": {
-    "workingCapitalPrincipalBufferCadMinor": 2000000,
     "stripperPieceRatePerVehicleCadMinor": 35000,
     "minShelvedPartsForStripPayout": 35,
-    "allowFounderDrawFromPrincipalBuffer": false,
+    "allowFounderDrawFromSeedCapital": false,
     "autoOffsetHunterDrawAgainstFloat": true
   },
   "cannabisCompliance": {
@@ -178,22 +200,40 @@ All configurable parameters live in `src/core/config/pricing-policy.json` and ca
    $$\text{GradeAdjustedMarketValue}_{\text{CAD}} = \text{round}\left(\text{CompBaseline}_{\text{CAD}} \times \gamma_{\text{ARA}}\right)$$
    * Domestic `retailPriceCadMinor` defaults to $\text{GradeAdjustedMarketValue}_{\text{CAD}}$.
    * In Trinidad, the **Recommended Wholesale Ask Price (`recommendedAskTtdMinor`)** scales with $\gamma_{\text{ARA}}$, while the **Minimum Vault COD Floor Price (`vaultFloorPriceTtdMinor`)** remains strictly anchored to actual allocated cost basis + landed taxes/freight so discounting a `GRADE_C` part never breaches hard cost recovery without an explicit CFO override.
-5. **Rule `RULE-PRC-002` (Pre-VAT Broker Commission Base):**
+5. **Rule `RULE-PRC-002` (Pre-VAT Broker Commission Base & Counter Netting):**
    * `SaleTransaction.brokerCommissionMinor` is always calculated strictly on the **pre-tax subtotal (`subtotalMinor`)**, never on collected output VAT (`taxOrVatMinor`):
    $$\text{brokerCommissionMinor} = \text{round}\left(\text{subtotalMinor} \times \frac{\text{brokerCommissionBps}}{10000}\right)$$
+   * **Broker Commission Deducted at Counter (`isBrokerCommissionDeductedAtCounter`):** When `isBrokerCommissionDeductedAtCounter == true`, the broker retained their commission directly from the cash handed over at the counter, so the physical cash added to `HELD_IN_DESTINATION_VAULT` is `grossCollectedMinor - brokerCommissionMinor`, keeping physical vault cash 100% accurate.
+6. **3-Tier Price Floor Evaluation & Negotiation Corridor (`checkoutPolicy`):**
+   * At checkout, the system snapshots `floorPriceAtCheckoutMinor` and computes $\text{discountAmountMinor} = \max(0,\; \text{floorPriceAtCheckoutMinor} - \text{grossCollectedMinor})$, evaluating three deterministic tiers:
+     1. **Tier 1 (At or Above Floor):** `grossCollectedMinor >= floorPriceAtCheckoutMinor` $\rightarrow$ Passes automatically (`discountReasonCode = null`).
+     2. **Tier 2 (Within Admin Negotiation Corridor):** In Trinidad (`DESTINATION_EXPORT_VAULT`), the maximum admin discount corridor is bounded by the 8.0% tolerance band (`vaultAdminDiscountToleranceBps = 800`), the $\text{TT\$100}$ small-part rounding floor (`vaultAdminSmallRoundingAllowanceTtdMinor = 10000`), and the $\text{TT\$750}$ hard dollar cap on high-ticket boats/engines (`vaultAdminMaxDiscountCapTtdMinor = 75000`):
+        $$\text{MaxAdminDiscount}_{\text{TTD}} = \min\left(\text{vaultAdminMaxDiscountCapTtdMinor},\; \max\left(\text{vaultAdminSmallRoundingAllowanceTtdMinor},\; \text{round}(\text{floorPriceAtCheckoutMinor} \times 0.08)\right)\right)$$
+        When $\text{discountAmountMinor} \le \text{MaxAdminDiscount}_{\text{TTD}}$ (or $\le 10.0\%$ in Ontario under `domesticAdminDiscountToleranceBps = 1000`), the sale is allowed for `TRINIDAD_VAULT_ADMIN` (or `HUNTER_MECHANIC` in Ontario) **IF AND ONLY IF** a valid `discountReasonCode` (`"CASH_ROUNDING" | "BUNDLE_DISCOUNT" | "TRANSIT_OR_SHOP_DAMAGE" | "AGED_INVENTORY_CLEARANCE"`) is selected.
+     3. **Tier 3 (Beyond Admin Corridor — Hard Lock / CFO Override Required):** When $\text{discountAmountMinor} > \text{MaxAdminDiscount}_{\text{TTD}}$, the mutation throws `FLOOR_PRICE_OVERRIDE_REQUIRED` unless either (a) `actorRole === 'ARCHITECT_CFO'`, or (b) a valid `cfoOverrideApprovedById` + `cfoOverrideReasonNote` (via CFO Override PIN/approval) is supplied.
 
-### 4.3 Domestic Net Realization, Operator Float & Destination Bank Cap Reconciliation Formulas
+### 4.3 Self-Funding Working Capital Pool, Domestic Net Realization, Operator Float & Destination Bank Cap Formulas
 
-1. **Domestic Channel Fee & Net Realization (`netRealizedCadMinor`):**
+1. **Self-Funding Available Working Capital Formula (`operationalGates.workingCapitalGate`):**
+   * Rather than relying on recurring external capital infusions, the venture operates on a one-time initial seed investment (`initialSeedCapitalCadMinor`, configurable $\$20,000\text{–}\$50,000\text{ CAD}$, default $\$35,000\text{ CAD}$) that self-funds strictly out of realized domestic sales and repatriated export settlements (`SETTLED_ORIGIN_CORP_BANK`, when `countPendingExportCashAsAvailable == false`):
+   $$\text{AvailableWorkingCapital}_{\text{CAD}} = \text{InitialSeedCapital}_{\text{CAD}} + \sum \text{NetRealizedDomesticSales}_{\text{CAD}} + \sum \text{RepatriatedExportSettlements}_{\text{CAD}} - \sum \text{TotalDeployedAcquisitionAndExpenseOutlay}_{\text{CAD}}$$
+   * A proposed vehicle acquisition passes the Working Capital Gate (`FR-DEAL-01` / `FR-INT-01`) if and only if:
+   $$\text{AvailableWorkingCapital}_{\text{CAD}} - \text{EstimatedDealOutlay}_{\text{CAD}} \ge \text{minCashReserveFloorCadMinor} \quad (\$7,500\text{ CAD})$$
+   (or if `enforcementMode == "WARN_ONLY" | "DISABLED"` or explicitly overridden by `ARCHITECT_CFO`).
+2. **Domestic Channel Fee & Net Realization (`netRealizedCadMinor`):**
    * Local origin cash/e-Transfer channels (`LOCAL_WALK_IN_CASH`, `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL`, `RETAIL_LOT_VEHICLE_SALE`, `WHOLESALE_MECHANIC_NETWORK`) incur $0\%$ platform fees ($r_{\text{channel\_fee}} = 0.0$), whereas `EBAY_MOTORS_SHIPPED` deducts $13.25\%$ ($r_{\text{channel\_fee}} = 0.1325$) plus outbound courier label costs:
    $$\text{PlatformFee}_{\text{CAD}} = \text{round}\left(\text{Subtotal}_{\text{CAD}} \times r_{\text{channel\_fee}}\right)$$
    $$\text{NetRealized}_{\text{CAD}} = \text{GrossCollected}_{\text{CAD}} - \text{PlatformFee}_{\text{CAD}} - \text{ShippingCost}_{\text{CAD}}$$
-   * `netRealizedCadMinor` is credited directly toward the donor `Vehicle` Break-Even Velocity counter and the $20\text{k CAD}$ Working Capital Buffer.
-2. **Operator Float Reconciliation (`HELD_IN_OPERATOR_FLOAT` — e.g., Taz's Ontario Shop Float):**
-   * Cash collected in Ontario with `cashCustodyState == 'HELD_IN_OPERATOR_FLOAT'` is tracked as an auditable petty-cash subledger balance that decreases when shop `Expense` receipts are logged with `paidFromCashCustody == 'HELD_IN_OPERATOR_FLOAT'` or when physical cash is deposited into the Canadian corporate bank account via `CashCustodyTransfer` (`SETTLED_ORIGIN_CORP_BANK`):
+   * `netRealizedCadMinor` is credited directly toward the donor `Vehicle` Break-Even Velocity counter and the **Self-Funding Working Capital Pool** (`AvailableWorkingCapital_CAD`).
+3. **Operator Float Reconciliation & Tiered Receipt/Voucher Policy (`HELD_IN_OPERATOR_FLOAT` & `expensePolicy`):**
+   * Cash collected in Ontario with `cashCustodyState == 'HELD_IN_OPERATOR_FLOAT'` is tracked as an auditable petty-cash subledger balance that decreases when shop `Expense` rows are logged with `paidFromCashCustody == 'HELD_IN_OPERATOR_FLOAT'` or when physical cash is deposited into the Canadian corporate bank account via `CashCustodyTransfer` (`SETTLED_ORIGIN_CORP_BANK`):
    $$\text{RunningOperatorFloat}_{\text{CAD}} = \sum \text{SaleTransaction}_{\text{HELD\_IN\_OPERATOR\_FLOAT}} - \sum \text{Expense}_{\text{paidFromFloat}} - \sum \text{CashCustodyTransfer}_{\text{FLOAT}\rightarrow\text{ORIGIN\_CORP\_BANK}}$$
-3. **Destination Commercial Bank Cap Reconciliation (`trinidadDepositAlertThresholdTtdMinor`):**
-   * Running TTD balances per Trinidadian commercial bank institution ($k$) reconcile direct buyer bank transfers, physical Vault cash deposits (`HELD_IN_DESTINATION_VAULT` $\rightarrow$ `DEPOSITED_DESTINATION_BANK`) via `CashCustodyTransfer`, and outbound FX repatriation batches (`CurrencySettlement` $\rightarrow$ `SETTLED_ORIGIN_CORP_BANK`):
+   * **Tiered Receipt Verification (`ReceiptVerificationState`):**
+     * `VERIFIED_RECEIPT`: Required for all expenses $> \text{pettyCashVoucherMaxCadMinor}$ ($\$50\text{ CAD}$) prior to final settlement; enforces non-empty `receiptStorageKey` in `R2_PRIVATE_EVIDENCE_BUCKET`.
+     * `PETTY_CASH_VOUCHER`: Permitted for minor unreceipted cash expenses $\le \$50\text{ CAD}$ with a mandatory `voucherReason` ($\ge 5\text{ chars}$), subject to a rolling 30-day operator cap of `monthlyUnreceiptedVoucherCapCadMinor` ($\$250\text{ CAD/month}$).
+     * `PENDING_RECEIPT_UPLOAD`: Temporary hold state for field expenses $> \$50\text{ CAD}$ logged with a `voucherReason` while awaiting receipt photo upload; tracked as an unverified operator float liability until transitioned to `VERIFIED_RECEIPT`.
+4. **Destination Commercial Bank Cap Reconciliation (`trinidadDepositAlertThresholdTtdMinor`):**
+   * Running TTD balances per Trinidadian commercial bank institution ($k$) reconcile direct buyer bank transfers, physical Vault cash deposits (`HELD_IN_DESTINATION_VAULT` $\rightarrow$ `DEPOSITED_DESTINATION_BANK`, where physical vault cash from counter sales equals $\text{grossCollectedMinor} - (\text{isBrokerCommissionDeductedAtCounter} \text{ ? } \text{brokerCommissionMinor} : 0)$) via `CashCustodyTransfer`, and outbound FX repatriation batches (`CurrencySettlement` $\rightarrow$ `SETTLED_ORIGIN_CORP_BANK`):
    $$\text{DestinationBankBalance}_{\text{Bank } k} = \sum \text{DirectWireSales}_{\text{Bank } k} + \sum \text{CashCustodyTransfer}_{\text{VAULT}\rightarrow\text{Bank } k} - \sum \text{CurrencySettlement}_{\text{From Bank } k}$$
 
 ### 4.4 Two-Stage Donor Cost Allocation, Market Price Guard & 3-Tier Shipment Profitability
@@ -223,9 +263,9 @@ To prevent working-capital burn on unsupervised yard labor or premature founder 
    * A donor `Vehicle` ($v$) is eligible for a `YARD_STRIPPER_PIECE_RATE` expense payout if and only if:
      $$\text{Vehicle}_v.\text{fluidsDrainedAt} \neq \text{NULL} \quad \land \quad \left|\left\{ p \in \text{Parts}(v) \;\middle|\; p.\text{custodyState} = \text{'SHELVED\_ORIGIN\_CONTAINER'} \land |p.\text{rawPhotoUrls}| \ge 1 \right\}\right| \ge N_{\text{min\_shelved}}$$
      where $N_{\text{min\_shelved}} = 35$ (`minShelvedPartsForStripPayout` for `AUTOMOBILE`).
-2. **Rule `RULE-PAY-002` (Principal Buffer Protection — Zero Founder Salaries from the $20k Buffer):**
-   * The `$20,000 CAD` bi-monthly investor capital buffer (`workingCapitalPrincipalBufferCadMinor`) is strictly reserved for inventory acquisition, repair parts, piece-rate stripping, and freight/customs.
-   * Founder profit draws (`category == 'PARTNER_PROFIT_DRAW'`) may only be disbursed when cumulative realized net profit across completed sales exceeds cumulative expenses and prior draws:
+2. **Rule `RULE-PAY-002` (Seed Capital Protection — Zero Founder Salaries from Initial Seed Principal):**
+   * The one-time initial seed capital pool (`initialSeedCapitalCadMinor`, configurable $\$20,000\text{–}\$50,000\text{ CAD}$) is strictly reserved for inventory acquisition, repair parts, piece-rate stripping, and freight/customs (`allowFounderDrawFromSeedCapital = false`).
+   * Founder profit draws (`category == 'PARTNER_PROFIT_DRAW'`) may only be disbursed when cumulative realized net profit across completed domestic and repatriated export sales exceeds cumulative expenses and prior draws:
      $$\text{DistributableRealizedProfitPool}_{\text{CAD}} = \sum \text{SaleTransaction.netRealizedCadMinor}_{\text{settled}} + \sum \text{Vehicle.scrapRecoveryCadMinor} - \sum \text{Expense.amountCadMinor}_{\text{settled}}$$
      $$\text{RequestedPartnerDraw}_{\text{CAD}} \le \max\left(0,\; \text{DistributableRealizedProfitPool}_{\text{CAD}}\right)$$
 3. **Rule `RULE-PAY-003` (Bi-Weekly Operator Float Offset on Partner Draws):**

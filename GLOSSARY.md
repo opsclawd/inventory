@@ -13,11 +13,11 @@ The binding between a User and an Organization that assigns the User's `UserRole
 _Avoid_: Team role, user tenant link, account access
 
 **Policy Configuration Port (`IPolicyConfigPort`)**:
-The hexagonal port (`getPolicyForOrg(organizationId)`) that loads versioned tariff, FX, margin, compensation, site capacity, and cannabis mass-balance parameters from `src/core/config/pricing-policy.json` merged with any tenant-specific `Organization.policyConfigJson` overrides.
+The hexagonal port (`getPolicyForOrg(organizationId)`) that loads versioned tariff, FX, margin, compensation, self-funding working capital gate, tiered expense voucher, checkout negotiation corridor, site capacity, and cannabis mass-balance parameters from `src/core/config/pricing-policy.json` merged with any tenant-specific `Organization.policyConfigJson` overrides.
 _Avoid_: Hardcoded constants, env config, global settings
 
 **Storage Location**:
-A scannable hierarchical physical slot (`Site -> Zone -> Container/Room -> Rack -> Shelf/Table -> Bin`) where a Vehicle, Part, or Cannabis Lot resides, governed by two data-driven columns: `allowedOrgType` (`SALVAGE_AND_EXPORT` vs. `CANNABIS_NURSERY_AND_PROCESSING`) and `maxActiveAssetCapacity` (seeded to `4` for the Kemptville Dismantling Pad, `8` for the Ramsayville Retail Lot, and `null` for standard shelf bins).
+A scannable hierarchical physical slot (`Site -> Zone -> Container/Room -> Rack -> Shelf/Table -> Bin`) where a Vehicle, Part, or Cannabis Lot resides, governed by two data-driven columns: `allowedOrgType` (`SALVAGE_AND_EXPORT` vs. `CANNABIS_NURSERY_AND_PROCESSING`) and `maxActiveAssetCapacity` (seeded to `4` for the Kemptville Dismantling Pad, `8` for the Ramsayville Retail Lot, and `null` for standard shelf bins, enforced according to `locationCapacityGate.enforcementMode`: `HARD_BLOCK | WARN_ONLY | DISABLED`).
 _Avoid_: Bin, shelf, warehouse spot, address
 
 **Site Zoning (`RULE-ZONE-001`)**:
@@ -28,9 +28,12 @@ _Avoid_: Hardcoded site check, property split, yard section
 An immutable, idempotent (`idempotencyKey`), timestamped record of a physical `Vehicle`, `Part`, or `CannabisLot` (enforced by a single-target SQL `CHECK` constraint) being scanned into a new `StorageLocation` or `ShipmentPallet` by an operator, tracking optimistic concurrency (`expectedVersion` and `hasConflict`).
 _Avoid_: Location update, move log, scan history, bin change
 
-**Expense**:
-An immutable, receipt-backed (`receiptStorageKey` in `R2_PRIVATE_EVIDENCE_BUCKET`) cost record scoped to an `Organization` and linked to a `Vehicle`, `Shipment`, or `CannabisLot`, corrected exclusively via append-only reversal entries (`isReversalEntry = true`).
-_Avoid_: Bill, payout, voucher, cost entry
+**Expense & Tiered Receipt Verification (`ReceiptVerificationState`)**:
+An immutable cost record (`Expense`) scoped to an `Organization` and linked to a `Vehicle`, `Shipment`, or `CannabisLot`, governed by three verification states (`expense_receipt_or_voucher_check`):
+1. **`VERIFIED_RECEIPT`:** Standard verified expense backed by a non-empty `receiptStorageKey` in `R2_PRIVATE_EVIDENCE_BUCKET` (mandatory for all settled expenses $> \$50\text{ CAD}$).
+2. **`PETTY_CASH_VOUCHER`:** Pressure-relief tier for minor unreceipted yard/shop cash outlays $\le \$50\text{ CAD}$ (`pettyCashVoucherMaxCadMinor = 5000`) up to $\$250\text{ CAD/month}$ per operator (`monthlyUnreceiptedVoucherCapCadMinor = 25000`), requiring a mandatory text `voucherReason` ($\ge 5\text{ characters}$).
+3. **`PENDING_RECEIPT_UPLOAD`:** Temporary hold state for field expenses $> \$50\text{ CAD}$ logged with a `voucherReason` while awaiting photo upload; tracked as an unverified operator float liability until `receiptStorageKey` is attached and transitioned to `VERIFIED_RECEIPT`.
+_Avoid_: Unrecorded cash payout, informal bill, untallied expense
 
 **Cash Custody Transfer**:
 A receipt-backed (`depositSlipStorageKey`) movement of physical cash from an `OperatorFloat` (`HELD_IN_OPERATOR_FLOAT`) into the origin corporate bank (`SETTLED_ORIGIN_CORP_BANK`) or from the destination export vault safe (`HELD_IN_DESTINATION_VAULT`) into a destination commercial bank (`DEPOSITED_DESTINATION_BANK`).
@@ -60,10 +63,10 @@ _Avoid_: Track, workflow, strategy, vehicle type
 
 **Orthogonal Part State Axes**:
 The four independent state dimensions governing a `Part` simultaneously without state-explosion:
-1. **`PartCustodyState` (Physical Custody):** `STRIPPED_RAW_OFFLINE`, `SHELVED_ORIGIN_CONTAINER`, `ON_EXPORT_PALLET`, `IN_TRANSIT_OCEAN_FREIGHT`, `SHELVED_DESTINATION_VAULT`, `SOLD_AND_RELEASED`, `SCRAPPED_OR_DESTROYED`.
-2. **`InventoryAvailabilityState` (Commercial Reservation/Sale):** `AVAILABLE`, `RESERVED_B2B_HOLD`, `COMMITTED_DOMESTIC_ORDER`, `PAID_PENDING_GATE_RELEASE`, `PAID_SETTLED`.
-3. **`EbaySyncState` (Marketplace Lock):** `NOT_LISTED`, `DRAFT_ENRICHED`, `SYNDICATED_LIVE`, `EXPORT_LOCK_PENDING`, `EXPORT_LOCK_CONFIRMED`, `DELISTED_SOLD`.
-4. **`PartComplianceState` (Safety & Enrichment Readiness):** `CLEAR_FOR_SYNDICATION`, `NEEDS_HUMAN_REVIEW`, `QUARANTINED_RECALL_OR_DG`.
+1. **`PartCustodyState` (Physical Custody):** `STRIPPED_RAW_OFFLINE`, `SHELVED_ORIGIN_CONTAINER`, `ON_EXPORT_PALLET`, `IN_TRANSIT_OCEAN_FREIGHT`, `CUSTOMS_HOLD_DESTINATION`, `SHELVED_DESTINATION_VAULT`, `SOLD_AND_RELEASED`, `SCRAPPED_OR_DAMAGED`.
+2. **`InventoryAvailabilityState` (Commercial Reservation/Sale):** `AVAILABLE`, `RESERVED_B2B_HOLD`, `COMMITTED_DOMESTIC_SALE`, `PENDING_VAULT_COD_PAYMENT`, `PAID_SETTLED`.
+3. **`EbaySyncState` (Marketplace Lock):** `NOT_LISTED`, `SYNDICATED_LIVE`, `EXPORT_LOCK_PENDING`, `EXPORT_LOCK_CONFIRMED`.
+4. **`PartComplianceState` (Safety & Enrichment Readiness):** `PENDING_ENRICHMENT`, `NEEDS_HUMAN_REVIEW`, `CLEARED_FOR_SALE`, `QUARANTINED_RECALL_OR_DG`.
 _Avoid_: Part status, single lifecycle enum, item state
 
 **Steering-Side Compatibility**:
@@ -108,6 +111,17 @@ _Avoid_: Overseas warehouse, Port of Spain depot, bonded store
 The minimum permissible Trinidad & Tobago Dollar (TTD) selling price for an exported item that recovers allocated Canadian cost basis, target export markup ($65\%$), compounded customs duty/VAT, shadow FX repatriation spread ($\text{FX}_{\text{shadow}}$), and pre-VAT broker commission (`RULE-PRC-002`). Branches on `isTrinidadEntityVatRegistered`: when `false` (Phase 1 default), the $12.5\%$ import VAT is included in the floor numerator as a non-recoverable cost and checkout `taxOrVatMinor = 0`; when `true`, import VAT is excluded as a recoverable Input Tax Credit and $12.5\%$ output VAT is charged at checkout with a `taxInvoiceNumber`.
 _Avoid_: Minimum price, reserve price, landed price, wholesale ask
 
+**3-Tier Checkout Negotiation Corridor (`checkoutPolicy`)**:
+The structured price-floor evaluation rule on `SaleTransaction` (governed by `checkoutStrictnessMode`: `BONDED_VAULT_STRICT | AUDIT_ENFORCED | STANDARD_POS`):
+1. **Tier 1 (At or Above Floor):** `grossCollectedMinor >= floorPriceAtCheckoutMinor` $\rightarrow$ Passes automatically (`discountReasonCode = null`).
+2. **Tier 2 (Within Admin Negotiation Corridor):** Discount (`discountAmountMinor`) is $\le \min(\text{vaultAdminMaxDiscountCapTtdMinor } [\text{TT\$750}],\; \max(\text{vaultAdminSmallRoundingAllowanceTtdMinor } [\text{TT\$100}],\; \text{floorPriceAtCheckoutMinor} \times 0.08))$ (or $\le 10\%$ in Ontario via `domesticAdminDiscountToleranceBps = 1000`) $\rightarrow$ Permitted for `TRINIDAD_VAULT_ADMIN` (or `HUNTER_MECHANIC` in Ontario) **if and only if** a valid `discountReasonCode` (`CASH_ROUNDING | BUNDLE_DISCOUNT | TRANSIT_OR_SHOP_DAMAGE | AGED_INVENTORY_CLEARANCE`) is selected.
+3. **Tier 3 (Beyond Admin Corridor — Hard Lock / CFO Override Required):** Discount exceeds the Admin Corridor $\rightarrow$ Throws `FLOOR_PRICE_OVERRIDE_REQUIRED` unless `actorRole === 'ARCHITECT_CFO'` or a valid `cfoOverrideApprovedById` + `cfoOverrideReasonNote` is supplied.
+_Avoid_: Informal haggling, unlogged discount, ad-hoc price drop
+
+**Broker Commission Deducted at Counter (`isBrokerCommissionDeductedAtCounter`)**:
+The boolean flag on `SaleTransaction` recording whether an on-island broker retained their referral commission (`brokerCommissionMinor`) directly from the cash handed over at the Vault counter; when `true`, the net physical cash added to `HELD_IN_DESTINATION_VAULT` is `grossCollectedMinor - brokerCommissionMinor` so physical safe cash reconciles to the cent.
+_Avoid_: Off-book broker cut, pocketed commission
+
 **Broker Market Price (`brokerMarketPriceTtdMinor`)**:
 The expected local destination selling price quoted by an on-island sales broker, compared against `vaultFloorPriceTtdMinor` prior to shipping.
 _Avoid_: Street price, island price, broker estimate
@@ -125,7 +139,7 @@ A standing demand request (`PreOrderWishList`) from an overseas buyer specifying
 _Avoid_: Backorder, want list, buyer lead
 
 **Sale Transaction**:
-An immutable checkout record (`SaleTransaction`) capturing domestic origin (`SaleMarketNode.DOMESTIC_ORIGIN`: `LOCAL_WALK_IN_CASH`, `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL`, `RETAIL_LOT_VEHICLE_SALE`, `WHOLESALE_MECHANIC_NETWORK`, `EBAY_MOTORS_SHIPPED`, `CAR_PART_WHOLESALE`) or destination export vault (`SaleMarketNode.DESTINATION_EXPORT_VAULT`: `DESTINATION_VAULT_COD`, `DESTINATION_PRE_ORDER_PICKUP`, `SECONDARY_ISLAND_WHOLESALE`) sales, payment proof, channel attribution, `CashCustodyState`, FIU rolling 30-day CDD verification (`RULE-COMP-FIU-01`), and gate release timestamps.
+An immutable checkout record (`SaleTransaction`) capturing domestic origin (`SaleMarketNode.DOMESTIC_ORIGIN`: `LOCAL_WALK_IN_CASH`, `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL`, `RETAIL_LOT_VEHICLE_SALE`, `WHOLESALE_MECHANIC_NETWORK`, `EBAY_MOTORS_SHIPPED`, `CAR_PART_WHOLESALE`) or destination export vault (`SaleMarketNode.DESTINATION_EXPORT_VAULT`: `DESTINATION_VAULT_COD`, `DESTINATION_PRE_ORDER_PICKUP`, `SECONDARY_ISLAND_WHOLESALE`) sales, `floorPriceAtCheckoutMinor`, 3-tier negotiation corridor fields, `isBrokerCommissionDeductedAtCounter`, payment proof, `CashCustodyState`, FIU rolling 30-day CDD verification (`RULE-COMP-FIU-01`), and gate release timestamps.
 _Avoid_: Order, invoice, receipt, checkout log
 
 **Blind Cycle Count**:
@@ -138,12 +152,14 @@ _Avoid_: Wire transfer, FX trade, repatriation wire
 
 ## Unit Economics, Cash Custody & Compensation (`shared` & `salvage` Schemas)
 
-**Working Capital Principal Buffer**:
-The $20,000 CAD bi-monthly investor capital pool (`workingCapitalPrincipalBufferCadMinor`) reserved strictly for inventory acquisition, repair parts, piece-rate stripping, and freight—never for founder salaries (`RULE-PAY-002`).
-_Avoid_: Investor loan, bank balance, operating budget, slush fund
+**Self-Funding Working Capital Pool (`AvailableWorkingCapital_CAD`)**:
+The self-sustaining capital pool initialized with a one-time seed investment (`initialSeedCapitalCadMinor`, configurable $\$20,000\text{–}\$50,000\text{ CAD}$, default $\$35,000\text{ CAD}$) and replenished strictly by realized domestic sales (`netRealizedCadMinor`) and repatriated export settlements (`SETTLED_ORIGIN_CORP_BANK`, when `countPendingExportCashAsAvailable = false`):
+$$\text{AvailableWorkingCapital}_{\text{CAD}} = \text{InitialSeedCapital}_{\text{CAD}} + \sum \text{NetRealizedDomesticSales}_{\text{CAD}} + \sum \text{RepatriatedExportSettlements}_{\text{CAD}} - \sum \text{TotalDeployedAcquisitionAndExpenseOutlay}_{\text{CAD}}$$
+Every new vehicle acquisition must leave at least `minCashReserveFloorCadMinor` ($\$7,500\text{ CAD}$) in liquid reserve for freight and customs (`AvailableWorkingCapital_CAD - EstimatedDealOutlay_CAD >= minCashReserveFloorCadMinor`), and founder salaries may never be drawn from `initialSeedCapitalCadMinor` (`RULE-PAY-002`).
+_Avoid_: Bi-monthly infusion, recurring investor top-up, slush fund
 
 **Operator Float (`HELD_IN_OPERATOR_FLOAT`)**:
-Physical domestic cash collected from local sales (`LOCAL_WALK_IN_CASH`, `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL`) and held in the field operator's custody (e.g., Taz's Ontario Shop Float) as an auditable petty-cash subledger balance that can fund receipted shop expenses (`paidFromCashCustody = 'HELD_IN_OPERATOR_FLOAT'`) or be swept to `SETTLED_ORIGIN_CORP_BANK` via `CashCustodyTransfer`.
+Physical domestic cash collected from local sales (`LOCAL_WALK_IN_CASH`, `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL`) and held in the field operator's custody (e.g., Taz's Ontario Shop Float) as an auditable petty-cash subledger balance that can fund receipted/vouchered shop expenses (`paidFromCashCustody = 'HELD_IN_OPERATOR_FLOAT'`) or be swept to `SETTLED_ORIGIN_CORP_BANK` via `CashCustodyTransfer`.
 _Avoid_: Shop cash, pocket cash, petty cash, local float
 
 **Two-Stage Pro-Rata Donor Cost Allocation**:
@@ -157,7 +173,7 @@ A flat per-vehicle labor payment (`YARD_STRIPPER_PIECE_RATE`, default $350 CAD) 
 _Avoid_: Stripper wage, hourly yard pay, dismantling fee
 
 **Partner Profit Draw (`RULE-PAY-002` & `RULE-PAY-003`)**:
-A founder compensation disbursement (`PARTNER_PROFIT_DRAW`) restricted strictly to positive `DistributableRealizedProfitPool_CAD` (`RULE-PAY-002`) and automatically netted against any outstanding `HELD_IN_OPERATOR_FLOAT` balance (`RULE-PAY-003`) before corporate bank cash is disbursed.
+A founder compensation disbursement (`PARTNER_PROFIT_DRAW`) restricted strictly to positive `DistributableRealizedProfitPool_CAD` (`RULE-PAY-002`, protecting `initialSeedCapitalCadMinor`) and automatically netted against any outstanding `HELD_IN_OPERATOR_FLOAT` balance (`RULE-PAY-003`) before corporate bank cash is disbursed.
 _Avoid_: Owner salary, founder wage, partner payout
 
 ## Cannabis Nursery & Processing (`cannabis` Schema)
