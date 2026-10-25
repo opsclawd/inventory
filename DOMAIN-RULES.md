@@ -5,7 +5,7 @@
 To prevent regulatory or market changes from requiring code deployments, the system strictly separates **Hard Code Invariants** from **Versioned Policy Parameters**:
 
 * **Hard Code Invariants (Enforced in TypeScript Entities / DB Triggers):** Multi-schema tenant isolation (`shared`, `salvage`, `cannabis`), Kemptville 19-acre site zoning firewall (`RULE-ZONE-001`), two-phase eBay export locking (`EXPORT_LOCK_PENDING` $\rightarrow$ `EXPORT_LOCK_CONFIRMED`), append-only financial/audit/destruction records, strict separation of Vault Admin COD verification from sales brokers, single-use HMAC gate pass consumption, gram-accurate cannabis mass-balance identity, and dual-witness cannabis destruction (`primaryUserId != witnessUserId`).
-* **Configurable Policy Parameters (Stored in `src/core/config/` or `SystemPolicy` DB Table):** Customs duty percentages, VAT rates, shadow FX multipliers, LHD/RHD part-category mappings, ARA grading multipliers, Kemptville/Ramsayville physical capacity caps, cannabis wet-to-dry moisture loss bands, extraction yield ranges, QAP variance alert thresholds (`RULE-CAN-001`), and jurisdiction-specific document checklists.
+* **Configurable Policy Parameters (Stored in `src/core/config/pricing-policy.json` or `shared.Organization.policyConfigJson` via `IPolicyConfigPort`):** Customs duty percentages, VAT rates, shadow FX multipliers, LHD/RHD part-category mappings, ARA grading multipliers, data-driven physical capacity caps (`StorageLocation.maxActiveAssetCapacity`), cannabis wet-to-dry moisture loss bands, extraction yield ranges, QAP variance alert thresholds (`RULE-CAN-001`), and jurisdiction-specific document checklists.
 
 ---
 
@@ -40,9 +40,9 @@ To maximize net margin and velocity while avoiding platform bot bans, inventory 
 | Inventory Class | Primary Sales Channel(s) | Listing & Syndication Mechanism | Fee & Logistics Rationale |
 | :--- | :--- | :--- | :--- |
 | **Small / Light Electronics & `LHD_ONLY` Parts (`< 15 kg`: ECUs, radar sensors, clusters, switches, steering racks, headlamps)** | `EBAY_MOTORS_SHIPPED` | Automated eBay Inventory API + Browse API comp floor (`FR-AI-01`) | High North American demand; easy to box and ship via courier despite `13.25%` platform fee. |
-| **Heavy / Bulky Domestic Parts (`>= 15 kg`: doors, hoods, bumpers, subframes, engines, transmissions)** | `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL`, `OTTAWA_WALK_IN_CASH` | **Manifest V3 Chrome Extension (`FR-MKT-02`)** autofilling Facebook Marketplace & Kijiji forms from `/api/marketplace/local-ad-payload/[sku]` | `0%` platform fee; eliminates `$150–$400` LTL freight/crating headaches via Ottawa/Ramsayville local pickup. |
-| **Quick-Turn $5,000 Beaters & Rebuilt Salvage Cars (`RAMS` Lot)** | `RAMSAYVILLE_LOT_RETAIL`, `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL` | Chrome Extension Vehicle Autofill (`FR-MKT-02`) + Physical Ramsayville 8-car retail lot | Turns Canadian cash every 7–14 days (`0%` fee) with mandatory DriveON SSC & signed Bill of Sale (`FR-CHK-01`). |
-| **`UNIVERSAL` SUV Assemblies, Watercraft & Shop Equipment (`TT_POS`)** | `TRINIDAD_VAULT_COD`, `TRINIDAD_PRE_ORDER_PICKUP` | Two-Tab "Live Container" B2B Storefront (`FR-MKT-01`) + WhatsApp B2B Alerts | Captures Caribbean arbitrage margin via Family Bonded Vault with `0` third-party rent and strict MFA `aal2` COD release (`FR-VLT-03`). |
+| **Heavy / Bulky Domestic Parts (`>= 15 kg`: doors, hoods, bumpers, subframes, engines, transmissions)** | `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL`, `LOCAL_WALK_IN_CASH` | **Manifest V3 Chrome Extension (`FR-MKT-02`)** autofilling Facebook Marketplace & Kijiji forms from `/api/marketplace/local-ad-payload/[sku]` | `0%` platform fee; eliminates `$150–$400` LTL freight/crating headaches via Ottawa/Ramsayville local pickup. |
+| **Quick-Turn $5,000 Beaters & Rebuilt Salvage Cars (`RAMS` Lot)** | `RETAIL_LOT_VEHICLE_SALE`, `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL` | Chrome Extension Vehicle Autofill (`FR-MKT-02`) + Physical Ramsayville 8-car retail lot (`StorageLocation.maxActiveAssetCapacity = 8`) | Turns Canadian cash every 7–14 days (`0%` fee) with mandatory DriveON SSC & signed Bill of Sale (`FR-CHK-01`). |
+| **`UNIVERSAL` SUV Assemblies, Watercraft & Shop Equipment (`TT_POS`)** | `DESTINATION_VAULT_COD`, `DESTINATION_PRE_ORDER_PICKUP`, `SECONDARY_ISLAND_WHOLESALE` | Two-Tab "Live Container" B2B Storefront (`FR-MKT-01`) + WhatsApp B2B Alerts | Captures Caribbean arbitrage margin via Family Bonded Vault with `0` third-party rent and strict MFA `aal2` COD release (`FR-VLT-03`). |
 
 ---
 
@@ -107,10 +107,10 @@ All configurable parameters live in `src/core/config/pricing-policy.json` and ca
     "minPartOutRoiMultiplier": 2.0
   },
   "domesticChannelFees": {
-    "OTTAWA_WALK_IN_CASH": 0.0,
+    "LOCAL_WALK_IN_CASH": 0.0,
     "FB_MARKETPLACE_LOCAL": 0.0,
     "KIJIJI_LOCAL": 0.0,
-    "RAMSAYVILLE_LOT_RETAIL": 0.0,
+    "RETAIL_LOT_VEHICLE_SALE": 0.0,
     "WHOLESALE_MECHANIC_NETWORK": 0.0,
     "EBAY_MOTORS_SHIPPED": 0.1325,
     "CAR_PART_WHOLESALE": 0.0
@@ -182,19 +182,19 @@ All configurable parameters live in `src/core/config/pricing-policy.json` and ca
    * `SaleTransaction.brokerCommissionMinor` is always calculated strictly on the **pre-tax subtotal (`subtotalMinor`)**, never on collected output VAT (`taxOrVatMinor`):
    $$\text{brokerCommissionMinor} = \text{round}\left(\text{subtotalMinor} \times \frac{\text{brokerCommissionBps}}{10000}\right)$$
 
-### 4.3 Domestic Net Realization, Shop Float & Trinidad Bank Cap Reconciliation Formulas
+### 4.3 Domestic Net Realization, Operator Float & Destination Bank Cap Reconciliation Formulas
 
 1. **Domestic Channel Fee & Net Realization (`netRealizedCadMinor`):**
-   * Local Ontario cash/e-Transfer channels (`OTTAWA_WALK_IN_CASH`, `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL`, `RAMSAYVILLE_LOT_RETAIL`, `WHOLESALE_MECHANIC_NETWORK`) incur $0\%$ platform fees ($r_{\text{channel\_fee}} = 0.0$), whereas `EBAY_MOTORS_SHIPPED` deducts $13.25\%$ ($r_{\text{channel\_fee}} = 0.1325$) plus outbound courier label costs:
+   * Local origin cash/e-Transfer channels (`LOCAL_WALK_IN_CASH`, `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL`, `RETAIL_LOT_VEHICLE_SALE`, `WHOLESALE_MECHANIC_NETWORK`) incur $0\%$ platform fees ($r_{\text{channel\_fee}} = 0.0$), whereas `EBAY_MOTORS_SHIPPED` deducts $13.25\%$ ($r_{\text{channel\_fee}} = 0.1325$) plus outbound courier label costs:
    $$\text{PlatformFee}_{\text{CAD}} = \text{round}\left(\text{Subtotal}_{\text{CAD}} \times r_{\text{channel\_fee}}\right)$$
    $$\text{NetRealized}_{\text{CAD}} = \text{GrossCollected}_{\text{CAD}} - \text{PlatformFee}_{\text{CAD}} - \text{ShippingCost}_{\text{CAD}}$$
    * `netRealizedCadMinor` is credited directly toward the donor `Vehicle` Break-Even Velocity counter and the $20\text{k CAD}$ Working Capital Buffer.
-2. **Taz's Ontario Shop Float Reconciliation (`HELD_BY_TAZ_FLOAT`):**
-   * Cash collected in Ontario with `cashCustodyState == 'HELD_BY_TAZ_FLOAT'` is tracked as an auditable petty-cash subledger balance that decreases when shop `Expense` receipts are logged with `paidFromCashCustody == 'HELD_BY_TAZ_FLOAT'` or when physical cash is deposited into the Canadian corporate bank account via `CashCustodyTransfer` (`SETTLED_CANADA_BANK`):
-   $$\text{RunningTazFloat}_{\text{CAD}} = \sum \text{SaleTransaction}_{\text{HELD\_BY\_TAZ\_FLOAT}} - \sum \text{Expense}_{\text{paidFromFloat}} - \sum \text{CashCustodyTransfer}_{\text{FLOAT}\rightarrow\text{CANADA\_BANK}}$$
-3. **Trinidad Commercial Bank Cap Reconciliation (`trinidadDepositAlertThresholdTtdMinor`):**
-   * Running TTD balances per Trinidadian commercial bank institution ($k$) reconcile direct buyer bank transfers, physical Vault cash deposits via `CashCustodyTransfer`, and outbound FX repatriation batches (`CurrencySettlement`):
-   $$\text{TrinidadBankBalance}_{\text{Bank } k} = \sum \text{DirectWireSales}_{\text{Bank } k} + \sum \text{CashCustodyTransfer}_{\text{VAULT}\rightarrow\text{Bank } k} - \sum \text{CurrencySettlement}_{\text{From Bank } k}$$
+2. **Operator Float Reconciliation (`HELD_IN_OPERATOR_FLOAT` — e.g., Taz's Ontario Shop Float):**
+   * Cash collected in Ontario with `cashCustodyState == 'HELD_IN_OPERATOR_FLOAT'` is tracked as an auditable petty-cash subledger balance that decreases when shop `Expense` receipts are logged with `paidFromCashCustody == 'HELD_IN_OPERATOR_FLOAT'` or when physical cash is deposited into the Canadian corporate bank account via `CashCustodyTransfer` (`SETTLED_ORIGIN_CORP_BANK`):
+   $$\text{RunningOperatorFloat}_{\text{CAD}} = \sum \text{SaleTransaction}_{\text{HELD\_IN\_OPERATOR\_FLOAT}} - \sum \text{Expense}_{\text{paidFromFloat}} - \sum \text{CashCustodyTransfer}_{\text{FLOAT}\rightarrow\text{ORIGIN\_CORP\_BANK}}$$
+3. **Destination Commercial Bank Cap Reconciliation (`trinidadDepositAlertThresholdTtdMinor`):**
+   * Running TTD balances per Trinidadian commercial bank institution ($k$) reconcile direct buyer bank transfers, physical Vault cash deposits (`HELD_IN_DESTINATION_VAULT` $\rightarrow$ `DEPOSITED_DESTINATION_BANK`) via `CashCustodyTransfer`, and outbound FX repatriation batches (`CurrencySettlement` $\rightarrow$ `SETTLED_ORIGIN_CORP_BANK`):
+   $$\text{DestinationBankBalance}_{\text{Bank } k} = \sum \text{DirectWireSales}_{\text{Bank } k} + \sum \text{CashCustodyTransfer}_{\text{VAULT}\rightarrow\text{Bank } k} - \sum \text{CurrencySettlement}_{\text{From Bank } k}$$
 
 ### 4.4 Two-Stage Donor Cost Allocation, Market Price Guard & 3-Tier Shipment Profitability
 
@@ -221,16 +221,16 @@ To prevent working-capital burn on unsupervised yard labor or premature founder 
 1. **Rule `RULE-PAY-001` (Piece-Rate Yard Stripper Payout Gate — `YARD_STRIPPER_PIECE_RATE`):**
    * Unskilled yard labor is compensated per completed vehicle (`stripperPieceRatePerVehicleCadMinor`, default `$350.00 CAD` / `$300–$400 CAD` range) rather than hourly wages.
    * A donor `Vehicle` ($v$) is eligible for a `YARD_STRIPPER_PIECE_RATE` expense payout if and only if:
-     $$\text{Vehicle}_v.\text{fluidsDrainedAt} \neq \text{NULL} \quad \land \quad \left|\left\{ p \in \text{Parts}(v) \;\middle|\; p.\text{custodyState} = \text{'SHELVED\_ONTARIO\_CONTAINER'} \land |p.\text{rawPhotoUrls}| \ge 1 \right\}\right| \ge N_{\text{min\_shelved}}$$
+     $$\text{Vehicle}_v.\text{fluidsDrainedAt} \neq \text{NULL} \quad \land \quad \left|\left\{ p \in \text{Parts}(v) \;\middle|\; p.\text{custodyState} = \text{'SHELVED\_ORIGIN\_CONTAINER'} \land |p.\text{rawPhotoUrls}| \ge 1 \right\}\right| \ge N_{\text{min\_shelved}}$$
      where $N_{\text{min\_shelved}} = 35$ (`minShelvedPartsForStripPayout` for `AUTOMOBILE`).
 2. **Rule `RULE-PAY-002` (Principal Buffer Protection — Zero Founder Salaries from the $20k Buffer):**
    * The `$20,000 CAD` bi-monthly investor capital buffer (`workingCapitalPrincipalBufferCadMinor`) is strictly reserved for inventory acquisition, repair parts, piece-rate stripping, and freight/customs.
    * Founder profit draws (`category == 'PARTNER_PROFIT_DRAW'`) may only be disbursed when cumulative realized net profit across completed sales exceeds cumulative expenses and prior draws:
      $$\text{DistributableRealizedProfitPool}_{\text{CAD}} = \sum \text{SaleTransaction.netRealizedCadMinor}_{\text{settled}} + \sum \text{Vehicle.scrapRecoveryCadMinor} - \sum \text{Expense.amountCadMinor}_{\text{settled}}$$
      $$\text{RequestedPartnerDraw}_{\text{CAD}} \le \max\left(0,\; \text{DistributableRealizedProfitPool}_{\text{CAD}}\right)$$
-3. **Rule `RULE-PAY-003` (Bi-Weekly Taz Float Offset on Partner Draws):**
-   * When disbursing an approved `PARTNER_PROFIT_DRAW` ($\text{DrawApproved}_{\text{CAD}}$) to `HUNTER_MECHANIC`, any positive cash balance currently held in `RunningTazFloat_CAD` (`HELD_BY_TAZ_FLOAT`) is deducted first:
-     $$\text{FloatOffsetApplied}_{\text{CAD}} = \min\left(\text{DrawApproved}_{\text{CAD}},\; \max(0, \text{RunningTazFloat}_{\text{CAD}})\right)$$
+3. **Rule `RULE-PAY-003` (Bi-Weekly Operator Float Offset on Partner Draws):**
+   * When disbursing an approved `PARTNER_PROFIT_DRAW` ($\text{DrawApproved}_{\text{CAD}}$) to `HUNTER_MECHANIC`, any positive cash balance currently held in `RunningOperatorFloat_CAD` (`HELD_IN_OPERATOR_FLOAT`) is deducted first:
+     $$\text{FloatOffsetApplied}_{\text{CAD}} = \min\left(\text{DrawApproved}_{\text{CAD}},\; \max(0, \text{RunningOperatorFloat}_{\text{CAD}})\right)$$
      $$\text{NetCashDisbursedFromBank}_{\text{CAD}} = \text{DrawApproved}_{\text{CAD}} - \text{FloatOffsetApplied}_{\text{CAD}}$$
 
 ---
@@ -273,29 +273,29 @@ Stored in `Vehicle.rebuildDossierJson` with private file keys in `R2_PRIVATE_EVI
 
 ### 6.2 Trinidad & Tobago FIU & Customs Clearance Checklist
 
-1. **Customer Due Diligence (CDD) Gate (Encrypted Private ID Storage):** Any single or linked `SaleTransaction` (`marketNode == 'TRINIDAD_VAULT'`) where `grossCollectedMinor >= 5000000` ($\text{TT\$50,000}$) requires uploading a private scan/photo of the buyer's government ID (`buyerIdDocumentStorageKey` in `R2_PRIVATE_EVIDENCE_BUCKET`), storing the AES-256-GCM application-encrypted ID type and number (`buyerIdNumberEncrypted`), and recording the buyer's full name before `isPaymentVerified` can be set to `true` (ensuring auditability upon statutory FIU inspection).
+1. **Customer Due Diligence (CDD) Gate (Encrypted Private ID Storage):** Any single or linked `SaleTransaction` (`marketNode == 'DESTINATION_EXPORT_VAULT'`) where `grossCollectedMinor >= 5000000` ($\text{TT\$50,000}$) requires uploading a private scan/photo of the buyer's government ID (`buyerIdDocumentStorageKey` in `R2_PRIVATE_EVIDENCE_BUCKET`), storing the AES-256-GCM application-encrypted ID type and number (`buyerIdNumberEncrypted`), and recording the buyer's full name before `isPaymentVerified` can be set to `true` (ensuring auditability upon statutory FIU inspection).
 2. **Large Cash Transaction Alert:** Any single or linked cash transaction $\ge \text{TT\$90,000}$ (`9000000` minor units) triggers a mandatory FIU compliance notice to the Trinidad Vault Admin and Architect/CFO.
-3. **Rule `RULE-COMP-FIU-01` (Deterministic 30-Day Rolling Window for Linked FIU Transactions):** A transaction is evaluated as **linked** if the current `SaleTransaction.grossCollectedMinor` plus the sum of `grossCollectedMinor` across all non-voided `SaleTransaction` records (`marketNode == 'TRINIDAD_VAULT'` and `isVoidedOrReversed == false`) within a **rolling 30-calendar-day window (`createdAt >= now() - 30 days`)** matching the same `buyerPhoneE164`, normalized `lower(trim(buyerName))`, or `buyerIdNumberEncrypted` reaches or exceeds `5000000` ($\text{TT\$50,000}$) for the CDD Government ID gate, or `9000000` ($\text{TT\$90,000}$) for the Large Cash Transaction Alert.
+3. **Rule `RULE-COMP-FIU-01` (Deterministic 30-Day Rolling Window for Linked FIU Transactions):** A transaction is evaluated as **linked** if the current `SaleTransaction.grossCollectedMinor` plus the sum of `grossCollectedMinor` across all non-voided `SaleTransaction` records (`marketNode == 'DESTINATION_EXPORT_VAULT'` and `isVoidedOrReversed == false`) within a **rolling 30-calendar-day window (`createdAt >= now() - 30 days`)** matching the same `buyerPhoneE164`, normalized `lower(trim(buyerName))`, or `buyerIdNumberEncrypted` reaches or exceeds `5000000` ($\text{TT\$50,000}$) for the CDD Government ID gate, or `9000000` ($\text{TT\$90,000}$) for the Large Cash Transaction Alert.
 
 ---
 
-## 7. Kemptville 19-Acre Site Zoning & Multi-Tenant Location Invariant (`RULE-ZONE-001`)
+## 7. Data-Driven Site Zoning & Multi-Tenant Location Invariant (`RULE-ZONE-001`)
 
-**Context:** The 19-acre Kemptville property (`siteCode == 'KEMP'`) hosts both a dedicated 100ft x 100ft salvage container pad (`ORG_SALVAGE_EXPORT`) and agricultural/nursery zones (`ORG_CANNABIS_NURSERY_PROC`). To protect municipal clean-yard compliance and Health Canada site inspection optics, physical location barcodes are strictly partitioned by zone and organization:
+**Context:** The 19-acre Kemptville property (`siteCode == 'KEMP'`) hosts both a dedicated 100ft x 100ft salvage container pad (`ORG_SALVAGE_EXPORT`) and agricultural/nursery zones (`ORG_CANNABIS_NURSERY_PROC`). Rather than hardcoding site names in TypeScript services, physical location barcodes are governed by two data-driven columns on `shared.StorageLocation` (`allowedOrgType` and `maxActiveAssetCapacity`) to protect municipal clean-yard compliance, Health Canada site inspection optics, and commercial SaaS portability:
 
 * **Rule (`RULE-ZONE-001`):**
-  1. **`ZONE_CONTAINER_PAD` (100ft x 100ft Pad, Containers `C01`–`C04`, e.g., `KEMP-C01-R01-S01-B01`):** Strictly restricted to `ORG_SALVAGE_EXPORT` assets (`salvage.Vehicle` and `salvage.Part`). Maximum **4 uncrushed vehicle shells** (`STAGED_ONTARIO_YARD`, `DISMANTLING_IN_PROGRESS`, or `HULK_AWAITING_SCRAP`) may occupy the pad at any time (`kemptvilleMaxUncrushedShellsOnPad = 4`).
-  2. **`ZONE_GREENHOUSE_AG` & `ZONE_TREE_FARM` (e.g., `KEMP-GRNH-R1-T1`, `KEMP-TREE-R1-B1`) and Brockville Facility (`BROCK-PROP-R1-T2`):** Strictly restricted to agricultural and nursery operations (`ORG_CANNABIS_NURSERY_PROC` — `cannabis.CannabisLot`).
-  3. **Cross-Zone & Cross-Tenant Scan Hard Block:** Scanning any `salvage.Vehicle` or `salvage.Part` into a `ZONE_GREENHOUSE_AG`, `ZONE_TREE_FARM`, or `BROCK` barcode—or scanning any `cannabis.CannabisLot` into `ZONE_CONTAINER_PAD`, `RAMS`, or `POSV`—is **hard-blocked** at the application and database layers (HTTP `422 Unprocessable Entity` — `SITE_ZONING_VIOLATION`).
+  1. **`ZONE_CONTAINER_PAD` (100ft x 100ft Pad, Containers `C01`–`C04`, e.g., `KEMP-C01-R01-S01-B01`):** Configured with `allowedOrgType = 'SALVAGE_AND_EXPORT'` and `maxActiveAssetCapacity = 4` on the dismantling pad (and `null` on individual shelf bins). Strictly restricted to `ORG_SALVAGE_EXPORT` assets (`salvage.Vehicle` and `salvage.Part`), enforcing a maximum of **4 uncrushed vehicle shells** (`STAGED_ONTARIO_YARD`, `DISMANTLING_IN_PROGRESS`, or `HULK_AWAITING_SCRAP`) on the pad at any time.
+  2. **`ZONE_GREENHOUSE_AG` & `ZONE_TREE_FARM` (e.g., `KEMP-GRNH-R1-T1`, `KEMP-TREE-R1-B1`) and Brockville Facility (`BROCK-PROP-R1-T2`):** Configured with `allowedOrgType = 'CANNABIS_NURSERY_AND_PROCESSING'`. Strictly restricted to agricultural and nursery operations (`ORG_CANNABIS_NURSERY_PROC` — `cannabis.CannabisLot`).
+  3. **Cross-Zone & Cross-Tenant Scan Hard Block:** Scanning any `salvage.Vehicle` or `salvage.Part` into a location where `allowedOrgType != 'SALVAGE_AND_EXPORT'`—or scanning any `cannabis.CannabisLot` into a location where `allowedOrgType != 'CANNABIS_NURSERY_AND_PROCESSING'`—is **hard-blocked** at the application and database layers (HTTP `422 Unprocessable Entity` — `SITE_ZONING_VIOLATION`).
 
-| Site & Zone Code (`siteCode` / `zoneCode`) | Owning Organization (`Organization.code`) | Allowed Domain Entities | Capacity & Compliance Gate |
-| :--- | :--- | :--- | :--- |
-| **`KEMP` / `ZONE_CONTAINER_PAD`** | `ORG_SALVAGE_EXPORT` | `salvage.Vehicle`, `salvage.Part` | Max 4 uncrushed shells on 100ft x 100ft pad; 4x 40ft containers (`C01`–`C04`). |
-| **`KEMP` / `ZONE_GREENHOUSE_AG`** | `ORG_CANNABIS_NURSERY_PROC` | `cannabis.CannabisLot` | Zero automotive/marine salvage items permitted; Health Canada nursery perimeter. |
-| **`KEMP` / `ZONE_TREE_FARM`** | `ORG_CANNABIS_NURSERY_PROC` | `cannabis.CannabisLot` | Agricultural/horticultural propagation only; zero salvage parts/vehicles permitted. |
-| **`RAMS` / `ZONE_RAMSAYVILLE_SHOP`** | `ORG_SALVAGE_EXPORT` | `salvage.Vehicle`, `salvage.Part` | Max 8 active vehicles (`ramsayvilleMaxActiveShopVehicles = 8`). |
-| **`POSV` / `ZONE_TRINIDAD_VAULT`** | `ORG_SALVAGE_EXPORT` | `salvage.Vehicle`, `salvage.Part` | Bonded family warehouse in Port of Spain; weekly blind cycle counts (`FR-VLT-05`). |
-| **`BROCK` / `ZONE_BROCKVILLE_FACILITY`** | `ORG_CANNABIS_NURSERY_PROC` | `cannabis.CannabisLot` | Indoor propagation, drying/curing, extraction ("moving the juice"), and CTLS vault. |
+| Site & Zone Code (`siteCode` / `zoneCode`) | Owning Organization (`Organization.code`) | `StorageLocation.allowedOrgType` | `StorageLocation.maxActiveAssetCapacity` | Allowed Domain Entities & Compliance Gate |
+| :--- | :--- | :--- | :---: | :--- |
+| **`KEMP` / `ZONE_CONTAINER_PAD`** | `ORG_SALVAGE_EXPORT` | `SALVAGE_AND_EXPORT` | `4` (Pad) / `null` (Bins) | `salvage.Vehicle`, `salvage.Part` — Max 4 uncrushed shells on 100ft x 100ft pad; 4x 40ft containers (`C01`–`C04`). |
+| **`KEMP` / `ZONE_GREENHOUSE_AG`** | `ORG_CANNABIS_NURSERY_PROC` | `CANNABIS_NURSERY_AND_PROCESSING` | `null` | `cannabis.CannabisLot` — Zero automotive/marine salvage items permitted; Health Canada nursery perimeter. |
+| **`KEMP` / `ZONE_TREE_FARM`** | `ORG_CANNABIS_NURSERY_PROC` | `CANNABIS_NURSERY_AND_PROCESSING` | `null` | `cannabis.CannabisLot` — Agricultural/horticultural propagation only; zero salvage parts/vehicles permitted. |
+| **`RAMS` / `ZONE_RAMSAYVILLE_SHOP`** | `ORG_SALVAGE_EXPORT` | `SALVAGE_AND_EXPORT` | `8` (Retail Lot) | `salvage.Vehicle`, `salvage.Part` — Max 8 active vehicles (`ramsayvilleMaxActiveShopVehicles = 8`). |
+| **`POSV` / `ZONE_TRINIDAD_VAULT`** | `ORG_SALVAGE_EXPORT` | `SALVAGE_AND_EXPORT` | `null` | `salvage.Vehicle`, `salvage.Part` — Bonded family warehouse in Port of Spain; weekly blind cycle counts (`FR-VLT-05`). |
+| **`BROCK` / `ZONE_BROCKVILLE_FACILITY`** | `ORG_CANNABIS_NURSERY_PROC` | `CANNABIS_NURSERY_AND_PROCESSING` | `null` | `cannabis.CannabisLot` — Indoor propagation, drying/curing, extraction ("moving the juice"), and CTLS vault. |
 
 ---
 

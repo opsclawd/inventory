@@ -40,6 +40,7 @@ This platform is a **Unified Multi-Tenant Domain-Driven Design (DDD) Modular Mon
 ```text
 src/
 ├── core/
+│   ├── domain/                    # Pure TypeScript domain calculators & 4-axis state guards
 │   ├── ports/                     # Hexagonal Port Interfaces (Zero external deps)
 │   ├── events/                    # Domain Event contracts & Outbox publisher
 │   └── config/                    # Versioned regulatory, tariff, FX & mass-balance parameters
@@ -159,26 +160,27 @@ enum AccountingSyncStatus {
 }
 
 enum SaleMarketNode {
-  ONTARIO_DOMESTIC    // Kemptville Yard / Ramsayville Shop / Ottawa Meetup
-  TRINIDAD_VAULT      // Port of Spain Family Warehouse
+  DOMESTIC_ORIGIN           // Kemptville Yard / Ramsayville Shop / Local Pickup
+  DESTINATION_EXPORT_VAULT  // Port of Spain Family Warehouse / Export Destination Vault
 
   @@schema("shared")
 }
 
 enum CashCustodyState {
-  HELD_BY_TAZ_FLOAT           // Cash in Taz's hands / Ramsayville shop Petty Cash (Ontario)
-  HELD_IN_TRINIDAD_VAULT      // Cash in Family Vault safe awaiting TT bank deposit
-  DEPOSITED_TRINIDAD_BANK     // In TT commercial bank awaiting FX conversion batch
-  SETTLED_CANADA_BANK         // Interac e-Transfer / Wire / eBay Payout in Canadian Corp Account
+  HELD_IN_OPERATOR_FLOAT      // Cash in Operator's hands / Shop Petty Cash Float (Origin)
+  HELD_IN_DESTINATION_VAULT   // Cash in Destination Vault safe awaiting bank deposit
+  DEPOSITED_DESTINATION_BANK  // In Destination commercial bank awaiting FX conversion batch
+  SETTLED_ORIGIN_CORP_BANK    // Interac e-Transfer / Wire / eBay Payout in Origin Corp Account
 
   @@schema("shared")
 }
 
 model Organization {
   id                        String           @id @default(uuid()) @db.Uuid
-  code                      String           @unique // "ORG_SALVAGE_EXPORT" | "ORG_CANNABIS_NURSERY_PROC"
+  slug                      String           @unique // "ORG_SALVAGE_EXPORT" | "ORG_CANNABIS_NURSERY_PROC"
   name                      String
   organizationType          OrganizationType
+  policyConfigJson          Json?            // Optional per-tenant JSON policy overrides (merges over pricing-policy.json)
   craBusinessNumberBn15     String?
   healthCanadaLicenseNumber String?          // Populated for ORG_CANNABIS_NURSERY_PROC
   isActive                  Boolean          @default(true)
@@ -247,18 +249,20 @@ model OrganizationMembership {
 }
 
 model StorageLocation {
-  id             String       @id @default(uuid()) @db.Uuid
-  organizationId String       @db.Uuid
-  organization   Organization @relation(fields: [organizationId], references: [id])
-  siteCode       String       // "KEMP", "RAMS", "POSV", "BROCK"
-  zoneCode       String       @default("ZONE_CONTAINER_PAD") // "ZONE_CONTAINER_PAD", "ZONE_GREENHOUSE_AG", "ZONE_TREE_FARM", "ZONE_RAMSAYVILLE_SHOP", "ZONE_TRINIDAD_VAULT", "ZONE_BROCKVILLE_FACILITY"
-  containerCode  String       // "C01".."C04", "V01", "PROP", "EXTR"
-  rackCode       String       // "R01".."R10"
-  shelfCode      String       // "S01".."S05" or "T01".."T10"
-  binCode        String       // "B01".."B20"
-  fullQrBarcode  String       @unique // e.g., "KEMP-C01-R02-S03-B04" or "BROCK-PROP-R1-T2"
-  maxWeightKg    Decimal      @default(150.0) @db.Decimal(6, 2)
-  createdAt      DateTime     @default(now())
+  id                     String           @id @default(uuid()) @db.Uuid
+  organizationId         String           @db.Uuid
+  organization           Organization     @relation(fields: [organizationId], references: [id])
+  allowedOrgType         OrganizationType // Enforces RULE-ZONE-001 at data layer (SALVAGE_AND_EXPORT vs CANNABIS_NURSERY_AND_PROCESSING)
+  maxActiveAssetCapacity Int?             // Configurable active vehicle/shell limit per zone (e.g., 4 for Kemptville Pad, 8 for Ramsayville Lot, null for shelf bins)
+  siteCode               String           // "KEMP", "RAMS", "POSV", "BROCK"
+  zoneCode               String           @default("ZONE_CONTAINER_PAD") // "ZONE_CONTAINER_PAD", "ZONE_GREENHOUSE_AG", "ZONE_TREE_FARM", "ZONE_RAMSAYVILLE_SHOP", "ZONE_TRINIDAD_VAULT", "ZONE_BROCKVILLE_FACILITY"
+  containerCode          String           // "C01".."C04", "V01", "PROP", "EXTR"
+  rackCode               String           // "R01".."R10"
+  shelfCode              String           // "S01".."S05" or "T01".."T10"
+  binCode                String           // "B01".."B20"
+  fullQrBarcode          String           @unique // e.g., "KEMP-C01-R02-S03-B04" or "BROCK-PROP-R1-T2"
+  maxWeightKg            Decimal          @default(150.0) @db.Decimal(6, 2)
+  createdAt              DateTime         @default(now())
 
   parts          Part[]
   vehicles       Vehicle[]
@@ -316,7 +320,7 @@ model Expense {
   amountOriginalMinor   Int
   currencyOriginal      CurrencyCode         @default(CAD)
   amountCadMinor        Int
-  paidFromCashCustody   CashCustodyState?    // Allows deducting shop expenses directly from HELD_BY_TAZ_FLOAT
+  paidFromCashCustody   CashCustodyState?    // Allows deducting shop expenses directly from HELD_IN_OPERATOR_FLOAT
   isReversalEntry       Boolean              @default(false)
   reversesExpenseId     String?              @db.Uuid
 
@@ -339,19 +343,19 @@ model Expense {
   @@schema("shared")
 }
 
-// Tracks partial lump-sum cash drops from Taz's Ontario Shop Float or Trinidad Vault safe to commercial banks
+// Tracks partial lump-sum cash drops from Operator Float or Destination Vault safe to commercial banks
 model CashCustodyTransfer {
   id                     String               @id @default(uuid()) @db.Uuid
   organizationId         String               @db.Uuid
   organization           Organization         @relation(fields: [organizationId], references: [id])
   transferCode           String               @unique // e.g., "DROP-ONT-2026-0012" or "DROP-POS-2026-0008"
   marketNode             SaleMarketNode
-  fromCustodyState       CashCustodyState     // HELD_BY_TAZ_FLOAT or HELD_IN_TRINIDAD_VAULT
-  toCustodyState         CashCustodyState     // SETTLED_CANADA_BANK or DEPOSITED_TRINIDAD_BANK
+  fromCustodyState       CashCustodyState     // HELD_IN_OPERATOR_FLOAT or HELD_IN_DESTINATION_VAULT
+  toCustodyState         CashCustodyState     // SETTLED_ORIGIN_CORP_BANK or DEPOSITED_DESTINATION_BANK
   currency               CurrencyCode
   amountMinor            Int
   equivalentCadMinor     Int
-  commercialBankName     String?              // Tracked against TT$200,000 DIC cap when toCustodyState == DEPOSITED_TRINIDAD_BANK
+  commercialBankName     String?              // Tracked against TT$200,000 DIC cap when toCustodyState == DEPOSITED_DESTINATION_BANK
   depositSlipStorageKey  String               // Mandatory private R2 key (enforced non-empty via SQL CHECK)
   recordedByUserId       String               @db.Uuid
   recordedByUser         User                 @relation("TransferRecordedByUser", fields: [recordedByUserId], references: [id])
@@ -462,11 +466,11 @@ enum AssetLifecycleState {
 
 enum PartCustodyState {
   STRIPPED_RAW_OFFLINE
-  SHELVED_ONTARIO_CONTAINER
+  SHELVED_ORIGIN_CONTAINER
   ON_EXPORT_PALLET
   IN_TRANSIT_OCEAN_FREIGHT
   CUSTOMS_HOLD_DESTINATION
-  SHELVED_TRINIDAD_VAULT
+  SHELVED_DESTINATION_VAULT
   SOLD_AND_RELEASED
   SCRAPPED_OR_DAMAGED
 
@@ -512,13 +516,13 @@ enum AraConditionGradeEnum {
   @@schema("salvage")
 }
 
-// Explicitly tracks how domestic CAD parts and Ramsayville cars are sold
+// Explicitly tracks how domestic origin parts and retail lot vehicles are sold
 enum DomesticSaleChannel {
-  OTTAWA_WALK_IN_CASH         // Mechanic or buyer walking into Ramsayville/Kemptville
+  LOCAL_WALK_IN_CASH          // Mechanic or buyer walking into origin yard/shop
   FB_MARKETPLACE_LOCAL        // Local pickup via Facebook Marketplace listing
   KIJIJI_LOCAL                // Local pickup via Kijiji ad
-  RAMSAYVILLE_LOT_RETAIL      // Whole beater / rebuilt salvage car sold off the 8-car lot
-  WHOLESALE_MECHANIC_NETWORK  // Direct B2B sale to local Ottawa/Gatineau repair shop
+  RETAIL_LOT_VEHICLE_SALE     // Whole beater / rebuilt salvage car sold off the retail lot
+  WHOLESALE_MECHANIC_NETWORK  // Direct B2B sale to local repair shop
   EBAY_MOTORS_SHIPPED         // Shipped domestic/US order (~13.25% platform fee + label)
   CAR_PART_WHOLESALE          // North American salvage exchange order
 
@@ -526,9 +530,9 @@ enum DomesticSaleChannel {
 }
 
 enum ExportSaleChannel {
-  TRINIDAD_VAULT_COD          // Standard Port of Spain Family Vault cash/wire release
-  TRINIDAD_PRE_ORDER_PICKUP   // Pre-sold via Mechanic Wish List / "Loading Now" tab
-  BARBADOS_B2B_WHOLESALE      // Secondary island wholesale lane
+  DESTINATION_VAULT_COD          // Standard Destination Vault cash/wire release
+  DESTINATION_PRE_ORDER_PICKUP   // Pre-sold via Mechanic Wish List / "Loading Now" tab
+  SECONDARY_ISLAND_WHOLESALE     // Secondary island wholesale lane
 
   @@schema("salvage")
 }
@@ -793,8 +797,8 @@ model SaleTransaction {
   marketNode              SaleMarketNode
 
   // Channel Attribution (Mutually exclusive via DB CHECK constraint)
-  domesticChannel         DomesticSaleChannel? // Populated when marketNode == ONTARIO_DOMESTIC
-  exportChannel           ExportSaleChannel?   // Populated when marketNode == TRINIDAD_VAULT
+  domesticChannel         DomesticSaleChannel? // Populated when marketNode == DOMESTIC_ORIGIN
+  exportChannel           ExportSaleChannel?   // Populated when marketNode == DESTINATION_EXPORT_VAULT
 
   taxInvoiceNumber          String?              @unique
   buyerName                 String
@@ -811,7 +815,7 @@ model SaleTransaction {
   verifiedByAdmin         User                 @relation("VerifiedByAdmin", fields: [verifiedByAdminId], references: [id])
 
   // Financial Totals (Minor Units / Cents)
-  paymentCurrency         CurrencyCode         // CAD (Ontario) or TTD/USD (Trinidad)
+  paymentCurrency         CurrencyCode         // CAD (Origin) or TTD/USD (Destination)
   subtotalMinor           Int
   platformFeeMinor        Int                  @default(0) // $0 for FB/Walk-In; ~13.25% for EBAY_MOTORS_SHIPPED
   shippingCostMinor       Int                  @default(0) // $0 for Local Pickup; Courier label cost for eBay
@@ -823,7 +827,7 @@ model SaleTransaction {
 
   // Private Evidence (Stored in R2_PRIVATE_EVIDENCE_BUCKET)
   paymentProofStorageKey  String               // Photo of cash, e-Transfer screenshot, or wire slip (Mandatory)
-  billOfSaleStorageKey    String?              // Mandatory when domesticChannel == RAMSAYVILLE_LOT_RETAIL
+  billOfSaleStorageKey    String?              // Mandatory when domesticChannel == RETAIL_LOT_VEHICLE_SALE
   ttdCommercialBankName   String?
 
   // Broker Commission (Trinidad / Overseas B2B only)
@@ -1124,14 +1128,14 @@ CREATE TRIGGER lock_sale_tx_immutable_cols BEFORE UPDATE ON "salvage"."SaleTrans
 
 -- 5. Enforce DomesticSaleChannel vs ExportSaleChannel by marketNode
 ALTER TABLE "salvage"."SaleTransaction" ADD CONSTRAINT sale_channel_node_integrity CHECK (
-  ("marketNode" = 'ONTARIO_DOMESTIC' AND "domesticChannel" IS NOT NULL AND "exportChannel" IS NULL)
+  ("marketNode" = 'DOMESTIC_ORIGIN' AND "domesticChannel" IS NOT NULL AND "exportChannel" IS NULL)
   OR
-  ("marketNode" = 'TRINIDAD_VAULT' AND "exportChannel" IS NOT NULL AND "domesticChannel" IS NULL)
+  ("marketNode" = 'DESTINATION_EXPORT_VAULT' AND "exportChannel" IS NOT NULL AND "domesticChannel" IS NULL)
 );
 
--- 6. Enforce Bill of Sale upload on Ramsayville Whole-Vehicle Retail Sales
-ALTER TABLE "salvage"."SaleTransaction" ADD CONSTRAINT ramsayville_vehicle_bill_of_sale_required CHECK (
-  "domesticChannel" != 'RAMSAYVILLE_LOT_RETAIL'
+-- 6. Enforce Bill of Sale upload on Retail Lot Whole-Vehicle Sales
+ALTER TABLE "salvage"."SaleTransaction" ADD CONSTRAINT retail_lot_vehicle_bill_of_sale_required CHECK (
+  "domesticChannel" != 'RETAIL_LOT_VEHICLE_SALE'
   OR ("billOfSaleStorageKey" IS NOT NULL AND length(trim("billOfSaleStorageKey")) > 0)
 );
 
@@ -1224,28 +1228,28 @@ An external HTTP request to eBay cannot run inside a PostgreSQL transaction. To 
 ```
 
 * **Physical Seal Gate Rule:** `ShipmentPallet.sealedAt` CANNOT be populated if any child `Part` on that pallet has `ebaySyncState == 'EXPORT_LOCK_PENDING'` or `custodyState == 'STRIPPED_RAW_OFFLINE'`. All parts must reach `EXPORT_LOCK_CONFIRMED` (or `NOT_LISTED`) before a pallet can be sealed.
-* **Online vs. Offline Initial `PartCustodyState` Assignment:** During 3-tap part intake (`FR-INT-02`), if the worker scans both the part QR (`PRT-XXXXXX`) and a valid destination storage bin QR (`toLocationBarcode`, e.g., `KEMP-C01-R01-S01-B01`) while online (or upon server sync of the intake + bin scan), `Part.custodyState` transitions immediately to `SHELVED_ONTARIO_CONTAINER` (and `storageLocationId` is populated). `STRIPPED_RAW_OFFLINE` is strictly a transient state for parts captured without a destination bin scan or queued locally in IndexedDB awaiting server reconciliation.
+* **Online vs. Offline Initial `PartCustodyState` Assignment:** During 3-tap part intake (`FR-INT-02`), if the worker scans both the part QR (`PRT-XXXXXX`) and a valid destination storage bin QR (`toLocationBarcode`, e.g., `KEMP-C01-R01-S01-B01`) while online (or upon server sync of the intake + bin scan), `Part.custodyState` transitions immediately to `SHELVED_ORIGIN_CONTAINER` (and `storageLocationId` is populated). `STRIPPED_RAW_OFFLINE` is strictly a transient state for parts captured without a destination bin scan or queued locally in IndexedDB awaiting server reconciliation.
 
-### 5.2 Offline Custody Chain, Site Zoning Guard & Conflict Resolution
+### 5.2 Offline Custody Chain, Data-Driven Site Zoning Guard & Conflict Resolution
 
 1. **No Silent Overwrites:** When an offline yard or nursery worker scans a part, whole asset, or cannabis lot into a storage bin, grow table, or pallet, the PWA appends a `CustodyEvent` containing `expectedVersion`, `organizationId`, and a client UUIDv7 `idempotencyKey`.
-2. **Kemptville 19-Acre Site Zoning Enforcement (`RULE-ZONE-001`):** Every location scan verifies that `StorageLocation.organizationId` matches the scanned item's organization and enforces the Kemptville site zoning boundary (`ZONE_CONTAINER_PAD` strictly for `ORG_SALVAGE_EXPORT`; `ZONE_GREENHOUSE_AG` and `ZONE_TREE_FARM` strictly for `ORG_CANNABIS_NURSERY_PROC`). Cross-tenant or cross-zone scans are rejected with HTTP `422 Unprocessable Entity` (`SITE_ZONING_VIOLATION`).
+2. **Data-Driven Site Zoning & Capacity Enforcement (`RULE-ZONE-001`):** Every location scan verifies that `StorageLocation.organizationId` and `StorageLocation.allowedOrgType` match the scanned item's organization (`SALVAGE_AND_EXPORT` vs. `CANNABIS_NURSERY_AND_PROCESSING`) and enforces `StorageLocation.maxActiveAssetCapacity` (seeded to `4` for the Kemptville Dismantling Pad, `8` for the Ramsayville Retail Lot, and `null` for standard shelf bins). Cross-tenant or cross-zone scans are rejected with HTTP `422 Unprocessable Entity` (`SITE_ZONING_VIOLATION`).
 3. **Server Reconciliation:** Upon sync, if `version == expectedVersion`, the server updates `storageLocationId` and increments `version`. If the version has diverged (e.g., another worker moved the item or it sold online while the device was offline), the server still records the `CustodyEvent` with `hasConflict = true` and surfaces a supervisor exception rather than silently dropping or overwriting the location.
 
-### 5.3 Adaptive Checkout, Cash Custody, Blind Cycle Counts & Trinidad Gate Release Protocol
+### 5.3 Adaptive Checkout, Cash Custody, Blind Cycle Counts & Destination Gate Release Protocol
 
 The unified mobile checkout workflow (`/checkout`) adapts dynamically based on the scanned item's custody location (`marketNode`):
 
-1. **Ontario Domestic Mode (`marketNode == 'ONTARIO_DOMESTIC'`):**
-   * **Context & Channel Attribution:** Triggered when `HUNTER_MECHANIC` or `ARCHITECT_CFO` scans a `PRT-XXXXXX` part or `AST-XXXXXX` whole vehicle located in Ontario (`KEMP` or `RAMS`). The UI defaults to `CAD` and presents `DomesticSaleChannel` selector pills (`OTTAWA_WALK_IN_CASH`, `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL`, `RAMSAYVILLE_LOT_RETAIL`, `WHOLESALE_MECHANIC_NETWORK`).
+1. **Domestic Origin Mode (`marketNode == 'DOMESTIC_ORIGIN'`):**
+   * **Context & Channel Attribution:** Triggered when `HUNTER_MECHANIC` or `ARCHITECT_CFO` scans a `PRT-XXXXXX` part or `AST-XXXXXX` whole vehicle located in Ontario (`KEMP` or `RAMS`). The UI defaults to `CAD` and presents `DomesticSaleChannel` selector pills (`LOCAL_WALK_IN_CASH`, `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL`, `RETAIL_LOT_VEHICLE_SALE`, `WHOLESALE_MECHANIC_NETWORK`).
    * **Immediate eBay Delist Outbox:** If any sold part is currently active on eBay (`ebaySyncState == 'SYNDICATED_LIVE'`), the checkout transaction atomically transitions the part to `custodyState = 'SOLD_AND_RELEASED'`, `availabilityState = 'PAID_SETTLED'`, and writes an `OutboxEvent` (`PartSoldLocallyDelistEbayRequested`) to immediately zero out the eBay Motors offer, preventing online double-sales.
-   * **Taz's Shop Float & Cash Custody Tracking:** Cash collected in person sets `cashCustodyState = 'HELD_BY_TAZ_FLOAT'`, creating an auditable shop petty-cash float that can be drawn down when logging shop `Expense` receipts (`paidFromCashCustody = 'HELD_BY_TAZ_FLOAT'`). Interac e-Transfers and wires default to `SETTLED_CANADA_BANK`.
-   * **Whole-Vehicle Lot Release & Break-Even Velocity:** Whole-vehicle retail sales (`RAMSAYVILLE_LOT_RETAIL`) enforce uploading a signed Bill of Sale (`billOfSaleStorageKey`), transition the `Vehicle` to `lifecycleState = 'SOLD_RETAIL_ONTARIO'` and `availabilityState = 'PAID_SETTLED'` (freeing 1 of the 8 Ramsayville shop lot slots), and credit `netRealizedCadMinor` (`grossCollectedMinor - platformFeeMinor - shippingCostMinor`) toward the donor VIN's Break-Even Velocity counter and the $20k Capital Buffer. Because there is no separate warehouse security gate in Ontario, `isPaymentVerified` is set to `true` and `gateReleasedAt = now()` upon receipt upload.
-2. **Trinidad Vault Mode (`marketNode == 'TRINIDAD_VAULT'`):**
-   * **Strict Separation of Duties & MFA `aal2` Enforcement:** Users with `HUNTER_MECHANIC` or `OVERSEAS_B2B_BUYER` roles are hard-blocked at the API and RLS layers from mutating `SaleTransaction.isPaymentVerified` when `marketNode == 'TRINIDAD_VAULT'`. Only `TRINIDAD_VAULT_ADMIN` or `ARCHITECT_CFO` holding an active Supabase Auth JWT with Authenticator Assurance Level 2 (`aal2`) can verify payment.
+   * **Operator Float & Cash Custody Tracking:** Cash collected in person sets `cashCustodyState = 'HELD_IN_OPERATOR_FLOAT'`, creating an auditable shop petty-cash float that can be drawn down when logging shop `Expense` receipts (`paidFromCashCustody = 'HELD_IN_OPERATOR_FLOAT'`). Interac e-Transfers and wires default to `SETTLED_ORIGIN_CORP_BANK`.
+   * **Whole-Vehicle Lot Release & Break-Even Velocity:** Whole-vehicle retail sales (`RETAIL_LOT_VEHICLE_SALE`) enforce uploading a signed Bill of Sale (`billOfSaleStorageKey`), transition the `Vehicle` to `lifecycleState = 'SOLD_RETAIL_ONTARIO'` and `availabilityState = 'PAID_SETTLED'` (freeing 1 of the 8 Ramsayville shop lot slots), and credit `netRealizedCadMinor` (`grossCollectedMinor - platformFeeMinor - shippingCostMinor`) toward the donor VIN's Break-Even Velocity counter and the $20k Capital Buffer. Because there is no separate warehouse security gate in Ontario, `isPaymentVerified` is set to `true` and `gateReleasedAt = now()` upon receipt upload.
+2. **Destination Export Vault Mode (`marketNode == 'DESTINATION_EXPORT_VAULT'`):**
+   * **Strict Separation of Duties & MFA `aal2` Enforcement:** Users with `HUNTER_MECHANIC` or `OVERSEAS_B2B_BUYER` roles are hard-blocked at the API and RLS layers from mutating `SaleTransaction.isPaymentVerified` when `marketNode == 'DESTINATION_EXPORT_VAULT'`. Only `TRINIDAD_VAULT_ADMIN` or `ARCHITECT_CFO` holding an active Supabase Auth JWT with Authenticator Assurance Level 2 (`aal2`) can verify payment.
    * **Encrypted FIU Customer Due Diligence (CDD) Storage:** When a single or linked transaction totals $\ge \text{TT\$50,000}$, the checkout requires uploading a private photo/scan of the buyer's government ID (`buyerIdDocumentStorageKey` in `R2_PRIVATE_EVIDENCE_BUCKET`) and storing the AES-256-GCM application-encrypted ID type and number (`buyerIdNumberEncrypted`) so records can be produced during a statutory Trinidad FIU audit.
    * **Phased Gate Release vs. Weekly Blind Cycle Counts:**
-     * **Phase 1 & 2 (Atomic Checkout Release + Weekly Blind Cycle Counts):** While the Vault counter and exit gate are operated by the same team, verifying full payment (`grossCollectedMinor >= sum(vaultFloorPriceTtdMinor)`) and uploading payment proof atomically stamps `isPaymentVerified = true`, `gateReleasedAt = now()`, and transitions child parts to `custodyState = 'SOLD_AND_RELEASED'` (and whole assets to `lifecycleState = 'SOLD_EXPORT_COD'`). Physical shrinkage and off-book cash sales are policed via **Weekly Blind Cycle Counts (`CycleCountTask`)** (sampling up to 10 random `SHELVED_TRINIDAD_VAULT` items per week requiring a physical shelf QR scan + live timestamped photo) reconciled against TTD bank deposit slips.
+     * **Phase 1 & 2 (Atomic Checkout Release + Weekly Blind Cycle Counts):** While the Vault counter and exit gate are operated by the same team, verifying full payment (`grossCollectedMinor >= sum(vaultFloorPriceTtdMinor)`) and uploading payment proof atomically stamps `isPaymentVerified = true`, `gateReleasedAt = now()`, and transitions child parts to `custodyState = 'SOLD_AND_RELEASED'` (and whole assets to `lifecycleState = 'SOLD_EXPORT_COD'`). Physical shrinkage and off-book cash sales are policed via **Weekly Blind Cycle Counts (`CycleCountTask`)** (sampling up to 10 random `SHELVED_DESTINATION_VAULT` items per week requiring a physical shelf QR scan + live timestamped photo) reconciled against TTD bank deposit slips.
      * **Phase 3+ (Two-Step HMAC-SHA256 Gate Token):** Once dedicated exit gate guards are staffed separately from the payment desk, payment verification issues a single-use HMAC-SHA256 QR token (`gateTokenNonce`, valid for 4 hours), and scanning the token at the exit door atomically stamps `gateReleasedAt = now()` (returning HTTP `410 Gone` on replay).
 
 ### 5.4 Cannabis Mass-Balance Transformation & Dual-Witness Destruction Protocol
@@ -1262,16 +1266,82 @@ The unified mobile checkout workflow (`/checkout`) adapts dynamically based on t
 To prevent working-capital bleed on unsupervised yard labor and partner draws, `src/modules/cfo-subledger` enforces three domain guards before committing compensation `Expense` records:
 
 1. **Piece-Rate Yard Stripper Payout Gate (`RULE-PAY-001` — `category == 'YARD_STRIPPER_PIECE_RATE'`):**
-   * Unskilled rural yard labor is paid per completed vehicle rather than hourly. Logging a `YARD_STRIPPER_PIECE_RATE` expense requires a linked `vehicleId` (enforced by SQL `CHECK` constraint `piece_rate_requires_donor_vehicle`), `Vehicle.fluidsDrainedAt != null`, and at least `minShelvedPartsForStripPayout` (default `35` for `AUTOMOBILE`) child `Part` records bound to that `donorVehicleId` in `custodyState == 'SHELVED_ONTARIO_CONTAINER'` (with QR code, $\ge 1$ photo, and scanned container bin).
+   * Unskilled rural yard labor is paid per completed vehicle rather than hourly. Logging a `YARD_STRIPPER_PIECE_RATE` expense requires a linked `vehicleId` (enforced by SQL `CHECK` constraint `piece_rate_requires_donor_vehicle`), `Vehicle.fluidsDrainedAt != null`, and at least `minShelvedPartsForStripPayout` (default `35` for `AUTOMOBILE`) child `Part` records bound to that `donorVehicleId` in `custodyState == 'SHELVED_ORIGIN_CONTAINER'` (with QR code, $\ge 1$ photo, and scanned container bin).
 2. **Principal Buffer Protection (`RULE-PAY-002` — `category == 'PARTNER_PROFIT_DRAW'`):**
    * Neither founder (`ARCHITECT_CFO`, `HUNTER_MECHANIC`) may draw salary from the $20,000 CAD bi-monthly investor working-capital principal. The domain service blocks `PARTNER_PROFIT_DRAW` if `requestedDrawCadMinor > DistributableRealizedProfitPoolCadMinor` (cumulative realized net profit across completed sales minus unrecovered expenses and prior partner draws).
-3. **Bi-Weekly Taz Float Offset (`RULE-PAY-003`):**
-   * Whenever a `PARTNER_PROFIT_DRAW` is executed for `HUNTER_MECHANIC` while `RunningTazFloat_CAD > 0` (`HELD_BY_TAZ_FLOAT`), the system automatically nets the draw against the outstanding float balance first (recording the float settlement in the same transaction) so unreceipted shop cash never becomes unrecorded bonus pay.
+3. **Bi-Weekly Operator Float Offset (`RULE-PAY-003`):**
+   * Whenever a `PARTNER_PROFIT_DRAW` is executed for `HUNTER_MECHANIC` while `RunningOperatorFloat_CAD > 0` (`HELD_IN_OPERATOR_FLOAT`), the system automatically nets the draw against the outstanding float balance first (recording the float settlement in the same transaction) so unreceipted shop cash never becomes unrecorded bonus pay.
 
 ## 6. Hexagonal Ports Specification (`src/core/ports/index.ts`)
 
 ```typescript
 // src/core/ports/index.ts
+
+export interface PricingAndCompliancePolicy {
+  fxRates: {
+    cadToUsdSpot: number;
+    usdToTtdOfficialCustoms: number;
+    usdToTtdShadowRepatriation: number;
+  };
+  trinidadImportTax: {
+    isTrinidadEntityVatRegistered: boolean;
+    defaultAutoPartsDutyRate: number;
+    customsProcessingFeeRate: number;
+    vatRate: number;
+  };
+  oceanFreight: {
+    allocatedLclFreightUsdPerKg: number;
+    marineInsuranceRateOfFob: number;
+  };
+  marginsAndCommissions: {
+    targetExportMarkupOnCost: number;
+    defaultBrokerCommissionRate: number;
+    minBeaterNetProfitCadMinor: number;
+    minRebuildNetProfitCadMinor: number;
+    minPartOutRoiMultiplier: number;
+  };
+  domesticChannelFees: Record<string, number>;
+  araGradeMultipliers: Record<string, number>;
+  complianceThresholds: {
+    trinidadFiuCddThresholdTtdMinor: number;
+    trinidadFiuLargeCashReportTtdMinor: number;
+    trinidadDepositInsuranceCapTtdMinor: number;
+    trinidadDepositAlertThresholdTtdMinor: number;
+    cbsaCersValueThresholdCadMinor: number;
+    cbsaMarineCutoffHours: number;
+  };
+  siteZoningLimits: {
+    kemptvilleMaxUncrushedShellsOnPad: number;
+    kemptvilleContainerCount: number;
+    ramsayvilleMaxActiveShopVehicles: number;
+  };
+  compensationRules: {
+    workingCapitalPrincipalBufferCadMinor: number;
+    stripperPieceRatePerVehicleCadMinor: number;
+    minShelvedPartsForStripPayout: number;
+    allowFounderDrawFromPrincipalBuffer: boolean;
+    autoOffsetHunterDrawAgainstFloat: boolean;
+  };
+  cannabisCompliance: {
+    wetToDryMoistureLossMinPct: number;
+    wetToDryMoistureLossMaxPct: number;
+    biomassToCrudeExtractYieldMinPct: number;
+    biomassToCrudeExtractYieldMaxPct: number;
+    crudeToDistillateRefinementYieldMinPct: number;
+    crudeToDistillateRefinementYieldMaxPct: number;
+    maxUnaccountedVarianceAlertPct: number;
+  };
+}
+
+/**
+ * 0. ORGANIZATION-SCOPED POLICY CONFIGURATION PORT
+ * In Phase 1A, the default adapter loads and validates src/core/config/pricing-policy.json
+ * with Zod, while allowing per-tenant JSON overrides via shared.Organization.policyConfigJson
+ * for future Vertical SaaS tenants.
+ */
+export interface IPolicyConfigPort {
+  getPolicyForOrg(organizationId: string): Promise<PricingAndCompliancePolicy>;
+}
 
 export interface DecodedAssetSpec {
   identifier: string; // 17-char VIN or 12-char HIN

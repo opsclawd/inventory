@@ -4,25 +4,26 @@ A **Domain-Driven Design (DDD) Multi-Tenant Modular Monolith** built on Next.js 
 
 The platform powers **two distinct businesses** owned and operated by the partners on **80% shared physical warehouse infrastructure** (QR/ZPL thermal printing, mobile camera barcode scanning, hierarchical `StorageLocation` bins, receipt-gated expenses, cash custody tracking, and private Cloudflare R2 evidence storage), while keeping domain schemas strictly isolated for regulatory and tax audits:
 
-1. **Engine 1 — Auto/Marine Salvage, Domestic Flips & Trinidad Bonded Vault Export (`ORG_SALVAGE_EXPORT` — `salvage` DB schema):**
-   * **Kemptville Yard (`KEMP` — `ZONE_CONTAINER_PAD`):** Offline-first vehicle/watercraft dismantling, 3-tap part QR binding (`PRT-XXXXXX`), and 40ft container bin shelving (`C01`–`C04`, max 4 uncrushed shells).
-   * **Ramsayville Shop (`RAMS`):** Salvage-to-Rebuilt MTO Reg. 601 dossier tracking, quick-turn vehicle flips (max 8 active lot slots), and Ontario domestic CAD checkout with Taz's Shop Float subledger.
-   * **Export Consolidation & Trinidad Vault (`POSV`):** LCL pallet / FCL container manifesting, LHD-to-RHD destination fitment guards, broker-ready Commercial Invoice & Packing List generation, Port of Spain landed check-in, MFA `aal2` Cash-on-Delivery (COD) verification, FIU Customer Due Diligence encryption, weekly blind cycle counts, and $\text{TTD} \rightarrow \text{CAD}$ FX repatriation batch tracking.
+1. **Engine 1 — Auto/Marine Salvage, Domestic Flips & Bonded Vault Export (`ORG_SALVAGE_EXPORT` — `salvage` DB schema):**
+   * **Kemptville Yard (`KEMP` — `ZONE_CONTAINER_PAD`):** Offline-first vehicle/watercraft dismantling, 3-tap part QR binding (`PRT-XXXXXX` $\rightarrow$ `SHELVED_ORIGIN_CONTAINER`), and 40ft container bin shelving (`C01`–`C04`, data-driven `StorageLocation.maxActiveAssetCapacity = 4` uncrushed shells).
+   * **Ramsayville Shop (`RAMS`):** Salvage-to-Rebuilt MTO Reg. 601 dossier tracking, quick-turn vehicle flips (`RETAIL_LOT_VEHICLE_SALE`, `maxActiveAssetCapacity = 8` active lot slots), and domestic origin CAD checkout (`DOMESTIC_ORIGIN` / `LOCAL_WALK_IN_CASH`) with Operator Float (`HELD_IN_OPERATOR_FLOAT` — Taz's Shop Float) subledger.
+   * **Export Consolidation & Destination Vault (`POSV` — `DESTINATION_EXPORT_VAULT`):** LCL pallet / FCL container manifesting, LHD-to-RHD destination fitment guards, broker-ready Commercial Invoice & Packing List generation, Port of Spain landed check-in (`SHELVED_DESTINATION_VAULT`), MFA `aal2` Cash-on-Delivery (`DESTINATION_VAULT_COD`) verification, FIU Customer Due Diligence encryption, weekly blind cycle counts, and $\text{TTD} \rightarrow \text{CAD}$ FX repatriation batch tracking (`SETTLED_ORIGIN_CORP_BANK`).
 2. **Engine 2 — Health Canada Cannabis Nursery & Processing (`ORG_CANNABIS_NURSERY_PROC` — `cannabis` DB schema):**
-   * **Brockville JV Facility (`BROCK`) & Kemptville Nursery (`KEMP` — `ZONE_GREENHOUSE_AG` / `ZONE_TREE_FARM`):** 3-tap mother plant QR scanning to spawn clone tray batches (`LOT-YYYY-XXXX`), weatherproof ZPL tray label printing, and grow room/table custody tracking.
+   * **Brockville JV Facility (`BROCK`) & Kemptville Nursery (`KEMP` — `ZONE_GREENHOUSE_AG` / `ZONE_TREE_FARM`):** 3-tap mother plant QR scanning to spawn clone tray batches (`LOT-YYYY-XXXX`), weatherproof ZPL tray label printing, and grow room/table custody tracking (`allowedOrgType = CANNABIS_NURSERY_AND_PROCESSING`).
    * **Mass-Balance Processing ("Moving the Juice") & CTLS Compliance:** Wet-to-dry curing and biomass-to-extract (`CRUDE_EXTRACT`, `DISTILLATE_OR_ISOLATE`) transformations reconciled to the gram ($0.01\text{g}$), automatic QAP compliance holds when unaccounted variance exceeds $2.0\%$, Health Canada dual-witness destruction logs (`primaryUserId != witnessUserId`), private R2 Lab CoA attachments, and monthly Health Canada CTLS & CRA Form B300 reporting.
 
 ---
 
-## Multi-Schema PostgreSQL Isolation & Regulatory Firewall
+## Multi-Schema PostgreSQL Isolation, Regulatory Firewall & SaaS Portability
 
 The PostgreSQL database is partitioned into three schemas via Prisma `previewFeatures = ["multiSchema"]`:
 
-* **`shared` schema (`@@schema("shared")`):** `Organization`, `User`, `OrganizationMembership`, `StorageLocation`, `CustodyEvent`, `Expense`, `CashCustodyTransfer`, `OutboxEvent`, and `AuditLog`. Every operational record is scoped by `organizationId` and enforced by Supabase Row-Level Security (`organizationId = (auth.jwt() ->> 'organization_id')::uuid`).
+* **`shared` schema (`@@schema("shared")`):** `Organization` (`id`, `slug`, `code`, `organizationType`, `policyConfigJson`), `User`, `OrganizationMembership`, `StorageLocation` (with data-driven `allowedOrgType` and `maxActiveAssetCapacity`), `CustodyEvent`, `Expense`, `CashCustodyTransfer`, `OutboxEvent`, and `AuditLog`. Every operational record is scoped by `organizationId` and enforced by Supabase Row-Level Security (`organizationId = (auth.jwt() ->> 'organization_id')::uuid`).
 * **`salvage` schema (`@@schema("salvage")`):** `Vehicle`, `Part`, `Shipment`, `ShipmentPallet`, `PreOrderWishList`, `B2BReservation`, `SaleTransaction`, `SaleTransactionPartItem`, `SaleTransactionVehicleItem`, `CycleCountTask`, and `CurrencySettlement`.
 * **`cannabis` schema (`@@schema("cannabis")`):** `CannabisStrain`, `CannabisLot`, `CannabisLotTransformation`, and `CannabisDestructionLog`.
+* **Commercial Vertical-SaaS Portability (`IPolicyConfigPort`):** All market nodes (`DOMESTIC_ORIGIN`, `DESTINATION_EXPORT_VAULT`), sales channels (`LOCAL_WALK_IN_CASH`, `RETAIL_LOT_VEHICLE_SALE`, `DESTINATION_VAULT_COD`), cash custody states (`HELD_IN_OPERATOR_FLOAT`, `HELD_IN_DESTINATION_VAULT`, `SETTLED_ORIGIN_CORP_BANK`), and location zoning/capacity rules are data-driven and resolved per tenant via `IPolicyConfigPort` (`src/core/config/pricing-policy.json` with optional `Organization.policyConfigJson` overrides).
 
-> **Audit Isolation Guarantee:** A Health Canada CTLS inspector or CRA Excise auditor reviewing `ORG_CANNABIS_NURSERY_PROC` has **zero visibility** into `salvage` schema tables, Trinidad export manifests, or Ontario automotive cash sales. Simultaneously, Kemptville 19-acre site zoning (`RULE-ZONE-001`) hard-blocks scanning any `salvage` vehicle/part into a Greenhouse or Tree Farm barcode (`422 SITE_ZONING_VIOLATION`).
+> **Audit Isolation Guarantee:** A Health Canada CTLS inspector or CRA Excise auditor reviewing `ORG_CANNABIS_NURSERY_PROC` has **zero visibility** into `salvage` schema tables, Trinidad export manifests, or Ontario automotive cash sales. Simultaneously, data-driven site zoning (`RULE-ZONE-001` via `StorageLocation.allowedOrgType`) hard-blocks scanning any `salvage` vehicle/part into a Greenhouse or Tree Farm barcode (`422 SITE_ZONING_VIOLATION`).
 
 ---
 
@@ -31,7 +32,8 @@ The PostgreSQL database is partitioned into three schemas via Prisma `previewFea
 ```text
 src/
 ├── core/
-│   ├── ports/                     # Hexagonal Port Interfaces (Zero external deps)
+│   ├── domain/                    # Pure TypeScript domain calculators & 4-axis state guards
+│   ├── ports/                     # Hexagonal Port Interfaces (IPolicyConfigPort, IStoragePort, etc.)
 │   ├── events/                    # Domain Event contracts & Outbox publisher
 │   └── config/                    # Versioned regulatory, tariff, FX & mass-balance parameters
 ├── modules/
