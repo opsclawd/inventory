@@ -2,14 +2,18 @@
 
 Multi-tenant physical inventory, chain-of-custody, and unit-economics platform operating both the Ontario-to-Trinidad Auto/Marine Salvage & Flip venture and the Brockville/Kemptville Health Canada Cannabis Nursery & Processing venture.
 
-## Shared Operations & Physical Custody
+## Shared Operations & Physical Custody (`shared` Schema)
 
 **Organization**:
 A distinct legal and regulatory business entity (`ORG_SALVAGE_EXPORT` or `ORG_CANNABIS_NURSERY_PROC`) whose inventory, locations, expenses, and audit logs are strictly isolated from other entities.
 _Avoid_: Tenant, company, workspace, account
 
+**Organization Membership**:
+The binding between a User and an Organization that assigns the User's role within that entity and governs which workspaces appear in the Organization Workspace Switcher.
+_Avoid_: Team role, user tenant link, account access
+
 **Storage Location**:
-A scannable hierarchical physical slot (`Site -> Zone -> Container/Room -> Rack -> Shelf/Table -> Bin`) where an asset, part, or cannabis lot resides.
+A scannable hierarchical physical slot (`Site -> Zone -> Container/Room -> Rack -> Shelf/Table -> Bin`) where a Vehicle, Part, or Cannabis Lot resides.
 _Avoid_: Bin, shelf, warehouse spot, address
 
 **Site Zoning**:
@@ -17,10 +21,26 @@ The physical and regulatory boundary dividing the 19-acre Kemptville property in
 _Avoid_: Property split, yard section, land partition
 
 **Custody Event**:
-An immutable, timestamped record of a physical item being scanned into a new Storage Location or Shipment Pallet by an operator.
+An immutable, timestamped record of a physical Vehicle, Part, or Cannabis Lot being scanned into a new Storage Location or Shipment Pallet by an operator.
 _Avoid_: Location update, move log, scan history, bin change
 
-## Salvage, Dismantling & Domestic Flips
+**Expense**:
+An immutable, receipt-backed cost record scoped to an Organization and linked to a Vehicle, Shipment, or Cannabis Lot.
+_Avoid_: Bill, payout, voucher, cost entry
+
+**Cash Custody Transfer**:
+A receipt-backed movement of physical cash from the Taz Float or Trinidad Vault safe into a commercial bank account.
+_Avoid_: Bank drop, cash deposit, sweep
+
+**Outbox Event**:
+A transactional domain event persisted in the same database commit as a state change to trigger asynchronous side effects (such as eBay inventory zeroing or accounting sync) via background workers.
+_Avoid_: Webhook job, queue message, async task
+
+**Audit Log**:
+An append-only security record capturing actor, action, before/after state, and IP address for privileged mutations and private evidence access.
+_Avoid_: Activity log, system history, trace
+
+## Salvage, Dismantling & Domestic Flips (`salvage` Schema)
 
 **Vehicle**:
 A whole parent asset acquired for flipping, rebuilding, dismantling, or whole-unit export, encompassing road automobiles (VIN), recreational watercraft (HIN), and commercial shop equipment (Serial Number).
@@ -33,6 +53,10 @@ _Avoid_: Component, item, piece, spare
 **Operational Lane**:
 The commercial track assigned to a Vehicle upon acquisition: Quick-Turn Beater, High-End Rebuild, Dismantle and Export, or Whole-Unit Export.
 _Avoid_: Track, workflow, strategy, vehicle type
+
+**Orthogonal Part State Axes**:
+The four independent state dimensions governing a Part simultaneously: physical location (`PartCustodyState`), commercial reservation/sale status (`InventoryAvailabilityState`), online marketplace lock (`EbaySyncState`), and safety/enrichment readiness (`PartComplianceState`).
+_Avoid_: Part status, single lifecycle enum, item state
 
 **Steering-Side Compatibility**:
 The physical cockpit and traffic-side geometry classification of a Part (`UNIVERSAL`, `LHD_ONLY`, or `RHD_ONLY`) determining whether it can be exported to Right-Hand-Drive markets.
@@ -54,7 +78,7 @@ _Avoid_: eBay sync, delist lock, inventory hold
 A pre-formatted bundle of title, CAD price, OEM fitment notes, and sanitized photos consumed by the local Chrome Extension to autofill Facebook Marketplace and Kijiji listings.
 _Avoid_: FB post, Kijiji draft, scraper template
 
-## Export Logistics & Trinidad Bonded Vault
+## Export Logistics & Trinidad Bonded Vault (`salvage` Schema)
 
 **Shipment**:
 A consolidated outbound ocean freight movement (LCL pallet batch or FCL container) travelling from Canada to a destination port under a single customs declaration package.
@@ -63,6 +87,10 @@ _Avoid_: Container load, export batch, manifest, vessel run
 **Shipment Pallet**:
 A physical crated or shrink-wrapped pallet (`PLT-XXXXXX`) within a Shipment that holds scanned Parts and cannot be sealed until all child Parts clear export lock and hazmat gates.
 _Avoid_: Skid, crate, box, lot
+
+**Export Compliance Dossier**:
+The deterministic CSV and PDF package generated from a sealed Shipment—comprising the HS-grouped Commercial Invoice and Gross/Tare/Net Packing List—handed to the licensed customs broker for CBSA CERS and Trinidad ASYCUDA filing.
+_Avoid_: Shipping papers, customs form, export sheet
 
 **Trinidad Vault**:
 The family-owned secure commercial warehouse in Port of Spain where landed export inventory is stored, audited via blind cycle counts, and released strictly upon verified Cash-on-Delivery payment.
@@ -73,8 +101,12 @@ The minimum permissible Trinidad & Tobago Dollar (TTD) selling price for an expo
 _Avoid_: Minimum price, reserve price, landed price, wholesale ask
 
 **Broker Market Price**:
-The expected local Trinidad selling price quoted by an on-island sales broker, compared against the Vault Floor Price prior to shipping to prevent margin inversion.
+The expected local Trinidad selling price quoted by an on-island sales broker, compared against the Vault Floor Price prior to shipping.
 _Avoid_: Street price, island price, broker estimate
+
+**Margin Inversion Warning**:
+A pre-shipment block triggered when an item's computed Vault Floor Price exceeds its Broker Market Price, preventing unprofitable inventory from being packed onto an export pallet without CFO override.
+_Avoid_: Price alert, loss warning, negative margin flag
 
 **B2B Reservation**:
 A time-boxed 24-hour hold placed by an overseas mechanic or broker on a specific in-stock or in-transit Part or Vehicle.
@@ -84,11 +116,19 @@ _Avoid_: Pre-order, cart hold, booking
 A standing demand request from an overseas buyer specifying a target vehicle make, model, year range, and maximum TTD bid for parts not yet in stock.
 _Avoid_: Backorder, want list, buyer lead
 
+**Sale Transaction**:
+An immutable checkout record capturing domestic Ontario (CAD) or Trinidad Vault (TTD/USD) sales, payment proof, channel attribution, cash custody state, and gate release verification.
+_Avoid_: Order, invoice, receipt, checkout log
+
 **Blind Cycle Count**:
 A weekly anti-shrinkage audit task requiring the Trinidad Vault Admin to physically scan and photograph a random sample of Vault items without seeing their expected shelf locations beforehand.
 _Avoid_: Stocktake, inventory audit, shelf check
 
-## Unit Economics, Cash Custody & Compensation
+**Currency Settlement**:
+A batched foreign-exchange conversion of deposited TTD funds from a Trinidad commercial bank into settled CAD/USD in the Canadian corporate bank account, recording effective clearing rate and FX slippage.
+_Avoid_: Wire transfer, FX trade, repatriation wire
+
+## Unit Economics, Cash Custody & Compensation (`shared` & `salvage` Schemas)
 
 **Working Capital Principal Buffer**:
 The $20,000 CAD bi-monthly investor capital pool reserved strictly for inventory acquisition, repair parts, piece-rate stripping, and freight—never for founder salaries.
@@ -97,14 +137,6 @@ _Avoid_: Investor loan, bank balance, operating budget, slush fund
 **Taz Float**:
 Physical Canadian cash collected from local Ontario sales and held in the Hunter/Mechanic's custody (`HELD_BY_TAZ_FLOAT`) as an auditable petty-cash subledger balance.
 _Avoid_: Shop cash, pocket cash, petty cash, local float
-
-**Cash Custody Transfer**:
-A receipt-backed movement of physical cash from the Taz Float or Trinidad Vault safe into a commercial bank account.
-_Avoid_: Bank drop, cash deposit, sweep
-
-**Currency Settlement**:
-A batched foreign-exchange conversion of deposited TTD funds from a Trinidad commercial bank into settled CAD/USD in the Canadian corporate bank account, recording effective clearing rate and FX slippage.
-_Avoid_: Wire transfer, FX trade, repatriation wire
 
 **Two-Stage Cost Allocation**:
 The accounting method that assigns a provisional cost basis to each stripped Part upon removal and executes a final pro-rata cost true-up once the Uncrushed Hulk is weighed and scrapped.
@@ -118,7 +150,11 @@ _Avoid_: Stripper wage, hourly yard pay, dismantling fee
 A founder compensation disbursement restricted to the cumulative realized net profit pool and automatically netted against any outstanding Taz Float balance.
 _Avoid_: Owner salary, founder wage, partner payout
 
-## Cannabis Nursery & Processing
+## Cannabis Nursery & Processing (`cannabis` Schema)
+
+**Cannabis Strain**:
+A distinct genetic cultivar registered within `ORG_CANNABIS_NURSERY_PROC` defining lineage, target cannabinoid percentages, and terpene profile for mother plants and downstream lots.
+_Avoid_: Variety, SKU, plant type, flavor
 
 **Cannabis Lot**:
 A traceable biological or extracted inventory unit (`LOT-YYYY-XXXX`) tracked either by discrete plant count (`MOTHER_PLANT`, `CLONE_TRAY`, `VEGETATIVE_BATCH`) or continuous gram weight (`FRESH_HARVEST`, `DRIED_FLOWER`, `TRIM_BIOMASS`, `CRUDE_EXTRACT`, `DISTILLATE_OR_ISOLATE`).
