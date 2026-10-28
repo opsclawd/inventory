@@ -353,6 +353,17 @@ Stored in `Vehicle.rebuildDossierJson` with private file keys in `R2_PRIVATE_EVI
 
 ---
 
+### 7.1 Physical QR Hang-Tag & Cold-Chain Container Labelling Standard (`RULE-TAG-001` / `ADR-0002`)
+
+1. **Matte 10-MIL Synthetic Laser Hang-Tag Sheets Over Adhesive Thermal Stickers:**
+   * Direct-thermal labels blacken on contact with heat, motor oil, or brake cleaner, while industrial adhesive stickers fail to bond below $+10^\circ\text{C}$ and curl off small curved castings, sensors, wiring harnesses, and marine parts in unheated $-30^\circ\text{C}$ Kemptville containers (`KEMP-C01`–`C04`).
+   * Primary Day-1 tagging across both `ORG_SALVAGE_EXPORT` (`PRT-XXXXXX`, `AST-YYYY-XXXX`, `PLT-YYYY-XXX`, `KEMP-C01-*`) and `ORG_CANNABIS_NURSERY_PROC` (`LOT-YYYY-XXXX` mother plants, clone trays, and harvest bins) uses **matte `10-MIL` (`120 lb` cover) waterproof synthetic laser sheets (`8.5" × 11"` Letter, e.g., TerraSlate)** printed exclusively with **fused laser toner** (never inkjet ink) in **`3×4` (12-up)** or **`4×4` (16-up, $2.125" \times 2.75"$)** batch PDF/SVG grids (`300–400` tags per 25-sheet pack; zero glossy PVC pouches required).
+2. **Slot-Punch & `-40°C` Black UV Zip-Tie Fastening Rule:**
+   * Single-hang tags (`PRT-XXXXXX`, `LOT-YYYY-XXXX`) include a pre-marked **$15\text{mm} \times 4\text{mm}$ oval PVC badge slot-punch guide**; container rack bin cards (`KEMP-C01-R01-S01-B01`) include **dual top punch guides** to zip-tie directly to steel rack uprights (or slide into magnetic C-channels) so bin barcodes never peel off in winter.
+   * Tags are fastened exclusively with **Black UV-Stabilized Nylon 6/6 Zip Ties rated to $-40^\circ\text{C}$** ($4"$–$12"$ assorted ties looped through sensor pigtails, bolt holes, or painted door/hood/tailgate latch strikers for zero paint residue; heavy-duty $14"$ ties for engines, transmissions, and subframes). Standard white nylon zip ties are prohibited in unheated outdoor/container zones due to brittle fracture below $-20^\circ\text{C}$.
+3. **Dark-Container Camera Scan Geometry (`@zxing/browser`):**
+   * Every printed tag renders a high-contrast QR matrix **$\ge 1.5" \times 1.5"$ ($38\text{mm} \times 38\text{mm}$, Error Correction Level `M` or `Q`)** with a **$\ge 4$-module white quiet zone** on matte glare-free stock so mobile camera flash inside unlit sea cans locks on instantly without specular reflection. Zebra ZPL II output remains available as a secondary adapter format for Vertical-SaaS tenants and Phase 2A/3 $4" \times 6"$ parcel shipping labels.
+
 ## 8. Cannabis Mass-Balance, Extraction Yield & CTLS Category Rules (`RULE-CAN-001`)
 
 **Context:** Health Canada's Cannabis Tracking and Licensing System (CTLS) and the Canada Revenue Agency (CRA Form B300) require gram-accurate monthly reconciliation across all cultivation and processing stages.
@@ -377,7 +388,7 @@ Stored in `Vehicle.rebuildDossierJson` with private file keys in `R2_PRIVATE_EVI
 | `CannabisLotStage` | `trackingUnit` | CTLS Monthly Reporting Category | Mandatory Compliance & Quality Gate |
 | :--- | :---: | :--- | :--- |
 | **`MOTHER_PLANT`** | `PLANTS` | Vegetative Cannabis Plants | Bound to `CannabisStrain`; parent source for `CLONE_TRAY` batches. |
-| **`CLONE_TRAY`** | `PLANTS` | Vegetative Cannabis Plants | Spawned via 3-Tap Mother scan (`FR-CAN-01`); ZPL tray tag printed. |
+| **`CLONE_TRAY`** | `PLANTS` | Vegetative Cannabis Plants | Spawned via 3-Tap Mother scan (`FR-CAN-01`); 10-MIL synthetic laser QR tray tag (or optional ZPL label) printed. |
 | **`VEGETATIVE_BATCH`** | `PLANTS` | Vegetative Cannabis Plants | Tracked by plant count; any culled plants require dual-witness `CannabisDestructionLog`. |
 | **`FRESH_HARVEST`** | `GRAMS` | Whole Cannabis Plants / Fresh Cannabis | Wet harvest weight recorded immediately upon chop prior to drying room hang. |
 | **`DRIED_FLOWER`** | `GRAMS` | Dried Cannabis | Reconciled against `FRESH_HARVEST` (`72%–80%` moisture loss); requires `labCoaStorageKey` for release. |

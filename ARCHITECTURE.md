@@ -2,7 +2,7 @@
 
 ## 1. System Overview & Architectural Principles
 
-This platform is a **Unified Multi-Tenant Domain-Driven Design (DDD) Modular Monolith** adhering to **Hexagonal Architecture (Ports & Adapters)**. It runs **two distinct businesses** owned and operated by the partners on **80% shared physical warehouse infrastructure** (QR/ZPL thermal printing, mobile camera barcode scanning, hierarchical location bins, receipt-gated expenses, cash custody tracking, and private Cloudflare R2 evidence storage), while maintaining strict PostgreSQL schema and Row-Level Security (RLS) isolation:
+This platform is a **Unified Multi-Tenant Domain-Driven Design (DDD) Modular Monolith** adhering to **Hexagonal Architecture (Ports & Adapters)**. It runs **two distinct businesses** owned and operated by the partners on **80% shared physical warehouse infrastructure** (`8.5" × 11"` 10-MIL synthetic laser QR hang-tag sheet & optional ZPL II printing, mobile camera barcode scanning, hierarchical location bins, receipt-gated expenses, cash custody tracking, and private Cloudflare R2 evidence storage), while maintaining strict PostgreSQL schema and Row-Level Security (RLS) isolation:
 
 1. **Engine 1 (`ORG_SALVAGE_EXPORT` — `salvage` DB schema):** Canada-First Ontario Auto/Marine Dismantling, eBay Motors & Local Classifieds Syndication, Ramsayville Vehicle Flips, and Pre-Paid Export across four operational nodes:
    * **Node 1 (Kemptville Yard — `ZONE_CONTAINER_PAD`):** Offline-first vehicle/watercraft dismantling, QR tagging, and 40ft container bin storage (`C01`–`C04`), centralizing 100% of stripped parts inventory in Ontario.
@@ -40,13 +40,13 @@ This platform is a **Unified Multi-Tenant Domain-Driven Design (DDD) Modular Mon
 ```text
 src/
 ├── core/
-│   ├── domain/                    # Pure TypeScript domain calculators & 4-axis state guards
+│   ├── domain/                    # Pure TypeScript domain calculators & 5-axis state guards
 │   ├── ports/                     # Hexagonal Port Interfaces (Zero external deps)
 │   ├── events/                    # Domain Event contracts & Outbox publisher
 │   └── config/                    # Versioned regulatory, tariff, FX & mass-balance parameters
 ├── modules/
-│   ├── shared-ops/                # Shared Core: QR/ZPL printing, camera scanner, hierarchical
-│   │   ├── domain/                # StorageLocation + Kemptville zoning state machine,
+│   ├── shared-ops/                # Shared Core: 8.5"x11" synthetic laser QR tag sheets (+ ZPL),
+│   │   ├── domain/                # camera scanner, hierarchical StorageLocation + Kemptville zoning,
 │   │   ├── application/           # receipt-gated Expense & float ledger, R2 storage adapters
 │   │   └── infrastructure/
 │   ├── dismantling/               # Salvage Context 1: Asset intake, stripping, bin custody
@@ -1542,3 +1542,7 @@ export interface IAccountingGlPort {
   postFxSettlementJournal(settlementBatchId: string): Promise<{ externalGlJournalId: string }>;
 }
 ```
+
+> **Additional Shared-Ops Module Ports (`src/core/ports/*.port.ts`):**
+> * **`IStoragePort` (`src/core/ports/storage.port.ts`):** Enforces `R2_PUBLIC_MEDIA_BUCKET` (with mandatory `RULE-MKT-002` EXIF GPS stripping) vs. `R2_PRIVATE_EVIDENCE_BUCKET` (SHA-256 hashed private evidence accessed strictly via $\le 900\text{s}$ audit-logged presigned URLs).
+> * **`ILabelTagPort` (`src/core/ports/label-tag.port.ts` — `ADR-0002` / `RULE-TAG-001`):** Generates deterministic in-memory **`8.5" × 11"` Letter PDF (`Uint8Array`) and SVG printable sheets** (`12_UP_3X4` [12 tags/sheet] and `16_UP_4X4` [16 tags/sheet, $2.125" \times 2.75"$]) for `10-MIL` matte waterproof synthetic laser cardstock—rendering $\ge 1.5" \times 1.5"$ high-contrast QR codes with $\ge 4$-module quiet zones, dashed cut guidelines, and **$15\text{mm} \times 4\text{mm}$ oval zip-tie slot-punch guides** (or `2_HOLE_RACK_CARD` dual top holes for `KEMP-C01-*` steel rack upright cards)—alongside secondary `generateZplLabel(...)` Zebra ZPL II output for external SaaS yards and future $4" \times 6"$ outbound parcel labels.

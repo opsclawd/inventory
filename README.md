@@ -2,14 +2,14 @@
 
 A **Domain-Driven Design (DDD) Multi-Tenant Modular Monolith** built on Next.js 15, React 19, TypeScript 5, PostgreSQL 16 (Supabase multi-schema + RLS), Prisma ORM (`multiSchema`), BullMQ, and Cloudflare R2.
 
-The platform powers **two distinct businesses** owned and operated by the partners on **80% shared physical warehouse infrastructure** (QR/ZPL thermal printing, mobile camera barcode scanning, hierarchical `StorageLocation` bins, tiered receipt/voucher-gated expenses, cash custody tracking, and private Cloudflare R2 evidence storage), while keeping domain schemas strictly isolated for regulatory and tax audits:
+The platform powers **two distinct businesses** owned and operated by the partners on **80% shared physical warehouse infrastructure** (`8.5" × 11"` 10-MIL synthetic laser QR hang-tag sheets & optional ZPL printing, mobile camera barcode scanning, hierarchical `StorageLocation` bins, tiered receipt/voucher-gated expenses, cash custody tracking, and private Cloudflare R2 evidence storage), while keeping domain schemas strictly isolated for regulatory and tax audits:
 
 1. **Engine 1 — Canada-First Auto/Marine Salvage, eBay/Classifieds Syndication, Domestic Flips & Pre-Paid Direct Export (`ORG_SALVAGE_EXPORT` — `salvage` DB schema):**
    * **Kemptville Yard (`KEMP` — `ZONE_CONTAINER_PAD`):** Offline-first Ontario LHD vehicle/watercraft dismantling, 3-tap part QR binding (`PRT-XXXXXX` $\rightarrow$ `SHELVED_ORIGIN_CONTAINER`), 40ft container bin shelving (`C01`–`C04`, data-driven `StorageLocation.maxActiveAssetCapacity = 4` uncrushed shells), and **Zero-Typing Domestic Syndication (`FR-MKT-00`)** generating eBay Seller Hub Bulk CSVs (`< 15.0 kg` parts across North America, including 100% of `LHD_ONLY` parts) and EXIF-stripped local Ottawa classified payloads (`>= 15.0 kg` heavy assemblies).
    * **Ramsayville Shop (`RAMS`):** Salvage-to-Rebuilt MTO Reg. 601 dossier tracking, quick-turn vehicle flips (`RETAIL_LOT_VEHICLE_SALE`, `maxActiveAssetCapacity = 8` active lot slots), municipal bylaw stealth pickup hub (`"Ramsayville / East Ottawa, ON"`, `RULE-MKT-002`), and **Ontario Domestic CAD Checkout (`FR-CHK-01` / `DOMESTIC_ORIGIN`)** with atomic anti-double-sale delist sync (`DELIST_PENDING` / `DELIST_REQUIRED`), 10% negotiation corridor (`domesticAdminDiscountToleranceBps = 1000`), Operator Float (`HELD_IN_OPERATOR_FLOAT` — Taz's Shop Float) subledger, and **Self-Funding Working Capital Pool** (`initialSeedCapitalCadMinor` + realized CAD profits).
    * **Pre-Paid Direct Export (`RULE-EXP-001`) & Dormant Destination Bonded Vault (`POSV` — `DESTINATION_EXPORT_VAULT`):** Zero-consignment outbound export pallet/container manifesting (`FR-LOG-01`/`02`) gated on 100% upfront CAD/USD settlement in `SETTLED_ORIGIN_CORP_BANK` (`exportFulfillmentMode = 'PREPAID_ORIGIN_ONLY'`), LHD-to-RHD destination fitment guards, and broker-ready Commercial Invoice & Packing List generation. The full overseas Bonded Vault COD subsystem (`SHELVED_DESTINATION_VAULT`, MFA `aal2` `DESTINATION_VAULT_COD`, 3-tier TTD negotiation corridor, FIU CDD encryption, blind cycle counts, and $\text{TTD} \rightarrow \text{CAD}$ FX repatriation) remains schema-ready and dormant behind `IPolicyConfigPort` until Phase 3 overseas facility activation or external SaaS tenant use.
 2. **Engine 2 — Health Canada Cannabis Nursery & Processing (`ORG_CANNABIS_NURSERY_PROC` — `cannabis` DB schema):**
-   * **Brockville JV Facility (`BROCK`) & Kemptville Nursery (`KEMP` — `ZONE_GREENHOUSE_AG` / `ZONE_TREE_FARM`):** 3-tap mother plant QR scanning to spawn clone tray batches (`LOT-YYYY-XXXX`), weatherproof ZPL tray label printing, and grow room/table custody tracking (`allowedOrgType = CANNABIS_NURSERY_AND_PROCESSING`).
+   * **Brockville JV Facility (`BROCK`) & Kemptville Nursery (`KEMP` — `ZONE_GREENHOUSE_AG` / `ZONE_TREE_FARM`):** 3-tap mother plant QR scanning to spawn clone tray batches (`LOT-YYYY-XXXX`), weatherproof `10-MIL` synthetic laser QR hang-tag / tray-card printing (with optional ZPL support), and grow room/table custody tracking (`allowedOrgType = CANNABIS_NURSERY_AND_PROCESSING`).
    * **Mass-Balance Processing ("Moving the Juice") & CTLS Compliance:** Wet-to-dry curing and biomass-to-extract (`CRUDE_EXTRACT`, `DISTILLATE_OR_ISOLATE`) transformations reconciled to the gram ($0.01\text{g}$), automatic QAP compliance holds when unaccounted variance exceeds $2.0\%$, Health Canada dual-witness destruction logs (`primaryUserId != witnessUserId`), private R2 Lab CoA attachments, and monthly Health Canada CTLS & CRA Form B300 reporting.
 
 ---
@@ -32,13 +32,13 @@ The PostgreSQL database is partitioned into three schemas via Prisma `previewFea
 ```text
 src/
 ├── core/
-│   ├── domain/                    # Pure TypeScript domain calculators & 4-axis state guards
-│   ├── ports/                     # Hexagonal Port Interfaces (IPolicyConfigPort, IStoragePort, etc.)
+│   ├── domain/                    # Pure TypeScript domain calculators & 5-axis state guards
+│   ├── ports/                     # Hexagonal Port Interfaces (IPolicyConfigPort, IStoragePort, ILabelTagPort, etc.)
 │   ├── events/                    # Domain Event contracts & Outbox publisher
 │   └── config/                    # Versioned regulatory, tariff, FX & mass-balance parameters
 ├── modules/
-│   ├── shared-ops/                # QR/ZPL printing, camera scanner, hierarchical StorageLocation
-│   │                              # state machine, receipt-gated Expense & float ledger, R2 adapters
+│   ├── shared-ops/                # 8.5"x11" synthetic laser QR tag sheets (+ ZPL), camera scanner,
+│   │                              # hierarchical StorageLocation, receipt-gated Expense & float ledger, R2 adapters
 │   ├── dismantling/               # Salvage Context 1: Asset intake, stripping, bin custody
 │   ├── marketplace/               # Salvage Context 2: eBay sync, B2B storefront, WhatsApp
 │   ├── logistics-vault/           # Salvage Context 3: Pallets, manifests, Trinidad COD Vault

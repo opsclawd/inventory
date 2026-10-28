@@ -28,6 +28,10 @@ _Avoid_: Hardcoded site check, property split, yard section
 An immutable, idempotent (`idempotencyKey`), timestamped record of a physical `Vehicle`, `Part`, or `CannabisLot` (enforced by a single-target SQL `CHECK` constraint) being scanned into a new `StorageLocation` or `ShipmentPallet` by an operator, tracking optimistic concurrency (`expectedVersion` and `hasConflict`).
 _Avoid_: Location update, move log, scan history, bin change
 
+**Synthetic Laser QR Hang-Tag Sheet (`RULE-TAG-001`)**:
+An `8.5" × 11"` Letter-size `3×4` (12-up) or `4×4` (16-up) printable PDF/SVG grid rendered onto matte `10-MIL` waterproof synthetic laser cardstock (`PRT-XXXXXX`, `KEMP-C01-*`, `LOT-YYYY-XXXX`) with $\ge 1.5" \times 1.5"$ quiet-zone QR codes and $15\text{mm} \times 4\text{mm}$ slot-punch guides for fastening via $-40^\circ\text{C}$ black UV zip ties.
+_Avoid_: Direct-thermal sticker, inkjet paper pouch, white zip-tie tag
+
 **Expense & Tiered Receipt Verification (`ReceiptVerificationState`)**:
 An immutable cost record (`Expense`) scoped to an `Organization` and linked to a `Vehicle`, `Shipment`, or `CannabisLot`, governed by three verification states (`expense_receipt_or_voucher_check`):
 1. **`VERIFIED_RECEIPT`:** Standard verified expense backed by a non-empty `receiptStorageKey` in `R2_PRIVATE_EVIDENCE_BUCKET` (mandatory for all settled expenses $> \$50\text{ CAD}$).
