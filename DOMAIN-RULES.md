@@ -9,12 +9,12 @@ To prevent regulatory or market changes from requiring code deployments, the sys
 
 ---
 
-## 2. LHD vs. RHD Part Compatibility Matrix (Ontario Donor -> Trinidad Market)
+## 2. LHD vs. RHD Part Compatibility & Canada-First Multi-Channel Routing
 
-**Context:** Donor vehicles acquired in Ontario are Left-Hand Drive (`LHD_ONLY`), whereas Trinidad & Tobago and Barbados operate predominantly Right-Hand Drive (`RHD_ONLY`) fleets (alongside universal marine watercraft).
+**Context:** Donor vehicles acquired in Ontario are Left-Hand Drive (`LHD_ONLY`). Under the **Canada-First Domestic & eBay Motors Primary Rollout**, **100% of stripped parts from Ontario LHD donors** (both `UNIVERSAL` and `LHD_ONLY`) are immediately compatible with North American buyers (`EBAY_MOTORS_SHIPPED` and local Ottawa classifieds), completely eliminating LHD-to-RHD part waste. When fulfilling pre-paid export orders to Right-Hand Drive (`RHD_ONLY`) markets such as Trinidad & Tobago or Barbados, steering-side filtering applies automatically:
 
 * **Rule (`RULE-FIT-001`):** Any stripped automotive part must be assigned a `SteeringSideCompatibility` enum (`UNIVERSAL`, `LHD_ONLY`, `RHD_ONLY`) based on its `partCategoryName` default below, unless explicitly overridden by a human reviewer or matched to a verified LHD Caribbean buyer wish-list. **Important Fitment Clarification:** `UNIVERSAL` indicates **steering-side geometry neutrality only** (i.e., the part is not physically mirrored between LHD and RHD cockpits/firewalls); it **never** replaces mandatory OEM part-number or Hollander/interchange fitment verification (`oemFitmentVerified = true`) against destination-market vehicles across trim, engine, or model-year variants.
-* **Rule (`RULE-FIT-002`):** Parts flagged `LHD_ONLY` are automatically routed to **Domestic North American Channels (eBay Motors)** and blocked from being scanned onto a Trinidad LCL/FCL export pallet unless an explicit `PreOrderWishList` override exists.
+* **Rule (`RULE-FIT-002`):** Parts flagged `LHD_ONLY` are sold directly through **Domestic North American Channels (`EBAY_MOTORS_SHIPPED`, `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL`)** and blocked from being scanned onto an RHD-destined export pallet (`TT_POS`, `BB_BGI`) unless an explicit `PreOrderWishList` override exists.
 
 | Part Category (`partCategoryName`) | Default `SteeringSideCompatibility` | Export Eligibility (Trinidad / Barbados) | Notes / Physics & Fitment Rationale |
 | :--- | :--- | :--- | :--- |
@@ -33,16 +33,20 @@ To prevent regulatory or market changes from requiring code deployments, the sys
 | **Brake Booster, Master Cylinder & Pedal Box** | `LHD_ONLY` | **Blocked (eBay Only)** | Firewall mounting and brake line routing are side-specific. |
 | **Wiring Harnesses & Cabin/Dash Looms** | `LHD_ONLY` | **Blocked (eBay Only)** | Loom lengths, fuse-box breakouts, and firewall grommets are routed specifically for LHD cockpits. |
 
-### 2.1 Multi-Channel Domestic & Export Channel Routing Matrix (`RULE-MKT-001`)
+### 2.1 Multi-Channel Domestic & Pre-Paid Export Routing Matrix (`RULE-MKT-001`, `RULE-MKT-002` & `RULE-EXP-001`)
 
-To maximize net margin and velocity while avoiding platform bot bans, inventory is routed across sales channels based on physical weight, steering-side compatibility, and buyer geography:
+To maximize net CAD margin and cash velocity ($7\text{–}21$ day donor break-even) while avoiding platform bot bans, municipal bylaw complaints, and overseas credit risk, inventory is routed across channels via three operational rules:
+
+* **Rule (`RULE-MKT-001` — Weight & Geography Channel Split):** Small/light parts (`weightKg < heavyLocalOnlyThresholdKg` [$15.0\text{ kg}$]) default to `EBAY_MOTORS_SHIPPED` for North America-wide courier fulfillment; heavy/bulky assemblies (`weightKg >= 15.0 kg`) and retail lot vehicles default to local Ottawa pickup channels (`FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL`, `LOCAL_WALK_IN_CASH`, `WHOLESALE_MECHANIC_NETWORK`, `RETAIL_LOT_VEHICLE_SALE`).
+* **Rule (`RULE-MKT-002` — Kemptville Bylaw & Geolocation Stealth):** Because rural Kemptville (`KEMP`) enforces a complaint-driven municipal clean-yard bylaw, $100\%$ of product photos uploaded to `R2_PUBLIC_MEDIA_BUCKET` have EXIF GPS coordinates stripped, and $100\%$ of local classified ad payloads (`FR-MKT-00` / `FR-MKT-02`) format the pickup location strictly from `domesticSyndication.publicPickupLocationLabel` (default `"Ramsayville / East Ottawa, ON"`), routing local pickup buyers to the Ramsayville shop (`RAMS`) and never exposing the Kemptville container yard address.
+* **Rule (`RULE-EXP-001` — Zero Speculative Export / 100% Pre-Paid Origin Export Gate):** While `exportPolicy.exportFulfillmentMode == 'PREPAID_ORIGIN_ONLY'` (default when no family-operated destination bonded vault is active), shipping unpurchased inventory overseas on consignment is strictly prohibited. Any export `Shipment` or `ShipmentPallet` (whole watercraft, shop equipment, or `UNIVERSAL` parts pallets to Trinidad, Barbados, or the Middle East) is hard-blocked from sealing (`422 PREPAID_EXPORT_REQUIRED`) unless $100\%$ of items on the shipment have verified upfront CAD/USD payment settled in `SETTLED_ORIGIN_CORP_BANK` (or an explicit `ARCHITECT_CFO` verified-deposit override).
 
 | Inventory Class | Primary Sales Channel(s) | Listing & Syndication Mechanism | Fee & Logistics Rationale |
 | :--- | :--- | :--- | :--- |
-| **Small / Light Electronics & `LHD_ONLY` Parts (`< 15 kg`: ECUs, radar sensors, clusters, switches, steering racks, headlamps)** | `EBAY_MOTORS_SHIPPED` | Automated eBay Inventory API + Browse API comp floor (`FR-AI-01`) | High North American demand; easy to box and ship via courier despite `13.25%` platform fee. |
-| **Heavy / Bulky Domestic Parts (`>= 15 kg`: doors, hoods, bumpers, subframes, engines, transmissions)** | `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL`, `LOCAL_WALK_IN_CASH` | **Manifest V3 Chrome Extension (`FR-MKT-02`)** autofilling Facebook Marketplace & Kijiji forms from `/api/marketplace/local-ad-payload/[sku]` | `0%` platform fee; eliminates `$150–$400` LTL freight/crating headaches via Ottawa/Ramsayville local pickup. |
-| **Quick-Turn $5,000 Beaters & Rebuilt Salvage Cars (`RAMS` Lot)** | `RETAIL_LOT_VEHICLE_SALE`, `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL` | Chrome Extension Vehicle Autofill (`FR-MKT-02`) + Physical Ramsayville 8-car retail lot (`StorageLocation.maxActiveAssetCapacity = 8`) | Turns Canadian cash every 7–14 days (`0%` fee) with mandatory DriveON SSC & signed Bill of Sale (`FR-CHK-01`). |
-| **`UNIVERSAL` SUV Assemblies, Watercraft & Shop Equipment (`TT_POS`)** | `DESTINATION_VAULT_COD`, `DESTINATION_PRE_ORDER_PICKUP`, `SECONDARY_ISLAND_WHOLESALE` | Two-Tab "Live Container" B2B Storefront (`FR-MKT-01`) + WhatsApp B2B Alerts | Captures Caribbean arbitrage margin via Family Bonded Vault with `0` third-party rent and strict MFA `aal2` COD release (`FR-VLT-03`). |
+| **Small / Light Electronics, Trim & `LHD_ONLY` Parts (`< 15 kg`: ECUs, radar sensors, clusters, switches, taillights, steering racks, headlamps)** | `EBAY_MOTORS_SHIPPED` | **Phase 1A Zero-Typing eBay Seller Hub Bulk CSV (`FR-MKT-00`)** $\rightarrow$ **Phase 2A Automated eBay Inventory API + Webhooks** | `50%–75%` net margin (`$2,500–$4,000+` CAD long-tail profit/car); easy to box and courier across Canada/US after `13.25%` platform fee. |
+| **Heavy / Bulky Domestic Assemblies (`>= 15 kg`: engines, transmissions, doors, hoods, bumpers, subframes, seats)** | `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL`, `LOCAL_WALK_IN_CASH`, `WHOLESALE_MECHANIC_NETWORK` | **Phase 1A 1-Click Ad Payload (`FR-MKT-00`)** + **Phase 1B Manifest V3 Chrome Extension (`FR-MKT-02`)** with `"Ramsayville / East Ottawa, ON"` stealth pickup (`RULE-MKT-002`) | `60%–85%` net margin in `1–14 days`; `0%` platform fee, `$0` freight, `0%` FX loss—recovers `~$2,500` donor cost in `14–21 days`. |
+| **Quick-Turn $5,000 Beaters & High-End Rebuilt Salvage Cars (`RAMS` Lot)** | `RETAIL_LOT_VEHICLE_SALE`, `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL` | Local Ad Queue (`FR-MKT-00`) + Chrome Extension Vehicle Autofill (`FR-MKT-02`) + Ramsayville 8-car retail lot (`StorageLocation.maxActiveAssetCapacity = 8`) | Turns CAD every `7–14 days` (`$1.5k–$2k`/beater) or `30–60 days` (`$7k–$10k`/rebuild) at `0%` fee with DriveON SSC & signed Bill of Sale (`FR-CHK-01`). |
+| **Pre-Paid Direct Exports (`UNIVERSAL` Pallets, Watercraft & Shop Equipment)** | `DESTINATION_PRE_ORDER_PICKUP`, `SECONDARY_ISLAND_WHOLESALE` *(or Phase 3 `DESTINATION_VAULT_COD`)* | **100% Pre-Paid Origin Export Gate (`RULE-EXP-001`)** + Broker-Ready Commercial Invoice & Packing List (`FR-LOG-01`, `FR-LOG-02`) | Eliminates overseas consignment/shrinkage risk and `60–120 day` TTD FX lockup; Destination Bonded Vault (`FR-VLT-01..05`) stays dormant until Phase 3. |
 
 ---
 
@@ -153,6 +157,16 @@ All configurable parameters live in `src/core/config/pricing-policy.json` and ca
     "vaultAdminSmallRoundingAllowanceTtdMinor": 10000,
     "vaultAdminMaxDiscountCapTtdMinor": 75000,
     "domesticAdminDiscountToleranceBps": 1000
+  },
+  "exportPolicy": {
+    "exportFulfillmentMode": "PREPAID_ORIGIN_ONLY",
+    "requireFullPrepaymentBeforeShipmentSeal": true
+  },
+  "domesticSyndication": {
+    "publicPickupLocationLabel": "Ramsayville / East Ottawa, ON",
+    "heavyLocalOnlyThresholdKg": 15.0,
+    "ebaySiteId": "Canada",
+    "ebayCurrency": "CAD"
   },
   "siteZoningLimits": {
     "kemptvilleMaxUncrushedShellsOnPad": 4,

@@ -1,6 +1,6 @@
 # Unified Operations & Compliance ERP
 
-Multi-tenant physical inventory, chain-of-custody, and unit-economics platform operating both the Ontario-to-Trinidad Auto/Marine Salvage & Flip venture (`ORG_SALVAGE_EXPORT` — `salvage` schema) and the Brockville/Kemptville Health Canada Cannabis Nursery & Processing venture (`ORG_CANNABIS_NURSERY_PROC` — `cannabis` schema), architected with commercial vertical-SaaS generalizations on a shared operational core (`shared` schema).
+Multi-tenant physical inventory, chain-of-custody, and unit-economics platform operating both the Canada-First Ontario Auto/Marine Salvage, eBay/Classifieds Syndication, Domestic Flips & Pre-Paid Direct Export venture (`ORG_SALVAGE_EXPORT` — `salvage` schema, with optional overseas Destination Bonded Vault node dormant until Phase 3) and the Brockville/Kemptville Health Canada Cannabis Nursery & Processing venture (`ORG_CANNABIS_NURSERY_PROC` — `cannabis` schema), architected with commercial vertical-SaaS generalizations on a shared operational core (`shared` schema).
 
 ## Shared Operations, Policy Configuration & Physical Custody (`shared` Schema)
 
@@ -62,15 +62,16 @@ The commercial track (`OperationalLane`) assigned to a `Vehicle` upon acquisitio
 _Avoid_: Track, workflow, strategy, vehicle type
 
 **Orthogonal Part State Axes**:
-The four independent state dimensions governing a `Part` simultaneously without state-explosion:
+The five independent state dimensions governing a `Part` simultaneously without state-explosion:
 1. **`PartCustodyState` (Physical Custody):** `STRIPPED_RAW_OFFLINE`, `SHELVED_ORIGIN_CONTAINER`, `ON_EXPORT_PALLET`, `IN_TRANSIT_OCEAN_FREIGHT`, `CUSTOMS_HOLD_DESTINATION`, `SHELVED_DESTINATION_VAULT`, `SOLD_AND_RELEASED`, `SCRAPPED_OR_DAMAGED`.
 2. **`InventoryAvailabilityState` (Commercial Reservation/Sale):** `AVAILABLE`, `RESERVED_B2B_HOLD`, `COMMITTED_DOMESTIC_SALE`, `PENDING_VAULT_COD_PAYMENT`, `PAID_SETTLED`.
-3. **`EbaySyncState` (Marketplace Lock):** `NOT_LISTED`, `SYNDICATED_LIVE`, `EXPORT_LOCK_PENDING`, `EXPORT_LOCK_CONFIRMED`.
-4. **`PartComplianceState` (Safety & Enrichment Readiness):** `PENDING_ENRICHMENT`, `NEEDS_HUMAN_REVIEW`, `CLEARED_FOR_SALE`, `QUARANTINED_RECALL_OR_DG`.
+3. **`EbaySyncState` (eBay Motors Delist & Export Lock):** `NOT_LISTED`, `SYNDICATED_LIVE`, `DELIST_PENDING`, `DELISTED`, `EXPORT_LOCK_PENDING`, `EXPORT_LOCK_CONFIRMED`.
+4. **`ClassifiedsSyncState` (Local Ottawa Classifieds Delist Queue):** `NOT_POSTED`, `POSTED_LIVE`, `DELIST_REQUIRED`, `DELISTED`.
+5. **`PartComplianceState` (Safety & Enrichment Readiness):** `PENDING_ENRICHMENT`, `NEEDS_HUMAN_REVIEW`, `CLEARED_FOR_SALE`, `QUARANTINED_RECALL_OR_DG`.
 _Avoid_: Part status, single lifecycle enum, item state
 
 **Steering-Side Compatibility**:
-The physical cockpit and traffic-side geometry classification of a `Part` (`UNIVERSAL`, `LHD_ONLY`, or `RHD_ONLY`) determining whether it can be exported to Right-Hand-Drive markets (`RULE-FIT-001`, `RULE-FIT-002`).
+The physical cockpit and traffic-side geometry classification of a `Part` (`UNIVERSAL`, `LHD_ONLY`, or `RHD_ONLY`): both `UNIVERSAL` and `LHD_ONLY` parts are 100% compatible with Canadian/North American buyers, whereas `LHD_ONLY` parts remain gated against Right-Hand-Drive export destinations unless explicitly overridden (`RULE-FIT-001`, `RULE-FIT-002`).
 _Avoid_: Drive side, LHD/RHD flag, fitment type
 
 **OEM Fitment Verification**:
@@ -81,30 +82,42 @@ _Avoid_: Universal fit, compatibility check, part match
 A stripped donor `Vehicle` shell (`HULK_AWAITING_SCRAP`) remaining on the dismantling pad prior to being weighed and hauled away by a scrap metal recycler (`SCRAPPED_METAL_CLEARED`).
 _Avoid_: Carcass, shell, bare metal, scrap car
 
+**Zero-Typing Domestic Syndication Bridge (`FR-MKT-00`)**:
+The deterministic Day-1 listing pipeline that joins decoded donor specs, part category, and condition grade into $\le 80$-character SEO eBay titles, eBay Seller Hub Bulk CSV feeds, and local classified ad payloads without manual typing.
+_Avoid_: Manual listing draft, ad scraper, CSV dump
+
+**Geolocation Bylaw Stealth (`RULE-MKT-002`)**:
+The municipal compliance rule that strips EXIF GPS coordinates from public product photos and masks the rural Kemptville dismantling yard behind the `"Ramsayville / East Ottawa, ON"` pickup location on all local classified listings.
+_Avoid_: Fake address, hidden yard, location spoof
+
 **Two-Phase Export Lock**:
-The reservation protocol that blocks an eBay-listed `Part` from being sealed into an outbound `ShipmentPallet` until its online marketplace quantity is confirmed zeroed (`EXPORT_LOCK_PENDING` $\rightarrow$ `EXPORT_LOCK_CONFIRMED`, via supervisor manual verification in Phase 1 or automated eBay API sync in Phase 3).
+The reservation protocol that blocks an eBay-listed `Part` from being sealed into an outbound `ShipmentPallet` until its online marketplace quantity is confirmed zeroed (`EXPORT_LOCK_PENDING` $\rightarrow$ `EXPORT_LOCK_CONFIRMED`, via supervisor manual verification in Phase 1 or automated eBay API sync in Phase 2A).
 _Avoid_: eBay sync, delist lock, inventory hold
 
 **Local Ad Payload**:
-A pre-formatted bundle of SEO title, CAD ask price (`retailPriceCadMinor`), OEM fitment notes, and sanitized `R2_PUBLIC_MEDIA_BUCKET` WebP URLs consumed by the Manifest V3 Chrome Extension (`FR-MKT-02`) to autofill Facebook Marketplace (`FB_MARKETPLACE_LOCAL`) and Kijiji (`KIJIJI_LOCAL`) listings.
+A pre-formatted bundle of SEO title, CAD ask price (`retailPriceCadMinor`), `"Ramsayville / East Ottawa, ON"` pickup label, OEM fitment notes, and EXIF-stripped `R2_PUBLIC_MEDIA_BUCKET` WebP URLs consumed by the Local Classifieds Queue (`FR-MKT-00`) and Manifest V3 Chrome Extension (`FR-MKT-02`) to publish Facebook Marketplace (`FB_MARKETPLACE_LOCAL`) and Kijiji (`KIJIJI_LOCAL`) listings.
 _Avoid_: FB post, Kijiji draft, scraper template
 
 ## Export Logistics & Destination Bonded Vault (`salvage` Schema)
+
+**Pre-Paid Origin Export Gate (`RULE-EXP-001`)**:
+The zero-credit-risk export rule requiring 100% upfront CAD or USD payment settled in the origin corporate bank account (`SETTLED_ORIGIN_CORP_BANK`) before any outbound export pallet or whole-unit shipment can be sealed when `exportFulfillmentMode` is `PREPAID_ORIGIN_ONLY`.
+_Avoid_: Consignment shipment, pay-on-arrival export, open-account freight
 
 **Shipment**:
 A consolidated outbound ocean freight movement (`EXP-YYYY-TT-XXX`) travelling from Canada to a destination port (`TT_POS` or `BB_BGI`) under a single customs declaration package.
 _Avoid_: Container load, export batch, manifest, vessel run
 
 **Shipment Pallet**:
-A physical crated or shrink-wrapped pallet (`PLT-YYYY-XXX`) within a `Shipment` that holds scanned `Part` SKUs (`ON_EXPORT_PALLET`) and cannot be sealed (`sealedAt`) until all child parts reach `EXPORT_LOCK_CONFIRMED` (or `NOT_LISTED`) and clear hazmat/environmental gates.
+A physical crated or shrink-wrapped pallet (`PLT-YYYY-XXX`) within a `Shipment` that holds scanned `Part` SKUs (`ON_EXPORT_PALLET`) and cannot be sealed (`sealedAt`) until all child parts reach `EXPORT_LOCK_CONFIRMED` (or `NOT_LISTED` / `DELISTED`) and clear hazmat/environmental and prepayment (`RULE-EXP-001`) gates.
 _Avoid_: Skid, crate, box, lot
 
 **Export Compliance Dossier**:
-The deterministic CSV and PDF package generated from a sealed `Shipment` in Phase 1A (`FR-LOG-02`)—comprising the HS-grouped Commercial Invoice (using arm's-length wholesale FOB USD per `RULE-CUST-003`) and Gross/Tare/Net Packing List—handed to the licensed customs broker for CBSA CERS and Trinidad ASYCUDA filing.
+The deterministic CSV and PDF package generated from a sealed `Shipment` (`FR-LOG-02`)—comprising the HS-grouped Commercial Invoice (using arm's-length wholesale FOB USD per `RULE-CUST-003`) and Gross/Tare/Net Packing List—handed to the licensed customs broker for CBSA CERS and destination customs filing.
 _Avoid_: Shipping papers, customs form, export sheet
 
 **Destination Export Vault (`DESTINATION_EXPORT_VAULT`)**:
-The bonded family-owned commercial warehouse in Port of Spain (`POSV`) where landed export inventory (`SHELVED_DESTINATION_VAULT` / `LANDED_TRINIDAD_VAULT`) is stored, audited via weekly blind cycle counts (`FR-VLT-05`), and released strictly upon MFA `aal2` verified Cash-on-Delivery payment (`DESTINATION_VAULT_COD`).
+An optional overseas bonded commercial warehouse node (such as Port of Spain `POSV`, schema-ready and dormant in Phase 1 while `exportFulfillmentMode = 'PREPAID_ORIGIN_ONLY'`) where landed export inventory (`SHELVED_DESTINATION_VAULT`) is stored, audited via weekly blind cycle counts (`FR-VLT-05`), and released strictly upon MFA `aal2` verified Cash-on-Delivery payment (`DESTINATION_VAULT_COD`) once activated.
 _Avoid_: Overseas warehouse, Port of Spain depot, bonded store
 
 **Vault Floor Price (`vaultFloorPriceTtdMinor`)**:

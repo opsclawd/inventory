@@ -4,11 +4,11 @@
 
 This platform is a **Unified Multi-Tenant Domain-Driven Design (DDD) Modular Monolith** adhering to **Hexagonal Architecture (Ports & Adapters)**. It runs **two distinct businesses** owned and operated by the partners on **80% shared physical warehouse infrastructure** (QR/ZPL thermal printing, mobile camera barcode scanning, hierarchical location bins, receipt-gated expenses, cash custody tracking, and private Cloudflare R2 evidence storage), while maintaining strict PostgreSQL schema and Row-Level Security (RLS) isolation:
 
-1. **Engine 1 (`ORG_SALVAGE_EXPORT` — `salvage` DB schema):** Kemptville Auto/Marine Dismantling, Ramsayville Vehicle Flips, and Trinidad Bonded Vault Export across four operational nodes:
-   * **Node 1 (Kemptville Yard — `ZONE_CONTAINER_PAD`):** Offline-first vehicle/watercraft dismantling, QR tagging, and container bin storage (`C01`–`C04`).
-   * **Node 2 (Ramsayville Shop):** Vehicle repair, rebuild dossier tracking, and domestic retail preparation.
-   * **Node 3 (Export Consolidation & Transit):** LCL pallet / FCL container manifesting and customs broker data output.
-   * **Node 4 (Trinidad Vault):** Landed check-in, B2B reservation holds, strict Cash-on-Delivery (COD) checkout, and FX batch settlement.
+1. **Engine 1 (`ORG_SALVAGE_EXPORT` — `salvage` DB schema):** Canada-First Ontario Auto/Marine Dismantling, eBay Motors & Local Classifieds Syndication, Ramsayville Vehicle Flips, and Pre-Paid Export across four operational nodes:
+   * **Node 1 (Kemptville Yard — `ZONE_CONTAINER_PAD`):** Offline-first vehicle/watercraft dismantling, QR tagging, and 40ft container bin storage (`C01`–`C04`), centralizing 100% of stripped parts inventory in Ontario.
+   * **Node 2 (Ramsayville Shop & Domestic Fulfillment Hub):** Vehicle repair, Salvage-to-Rebuilt dossier tracking, 8-slot retail vehicle lot (`RETAIL_LOT_VEHICLE_SALE`), eBay Motors courier dispatch (`EBAY_MOTORS_SHIPPED`), and bylaw-stealth local Ottawa classifieds pickup (`"Ramsayville / East Ottawa, ON"` — `RULE-MKT-002`).
+   * **Node 3 (Pre-Paid Direct Export Consolidation):** LCL pallet / FCL container manifesting and broker-ready customs dossier output, governed by the **100% Pre-Paid Origin Export Gate (`RULE-EXP-001`)** prohibiting overseas consignment shipments when no destination vault is active.
+   * **Node 4 (Destination Bonded Vault — Schema-Ready / Dormant in Phase 1–2):** Landed check-in, B2B reservation holds, MFA `aal2` Cash-on-Delivery (COD) checkout, blind cycle counts, and FX batch settlement (retained in schema behind `exportPolicy.exportFulfillmentMode` for future overseas vault activation and Vertical-SaaS portability).
 2. **Engine 2 (`ORG_CANNABIS_NURSERY_PROC` — `cannabis` DB schema):** Brockville JV & Kemptville Health Canada Cannabis Nursery (mother plants, clones, and genetics) and Processing ("moving the juice" — wet-to-dry curing, biomass extraction, and bulk lot transformation):
    * **Node 5 (Brockville Facility & Kemptville Nursery — `ZONE_GREENHOUSE_AG` / `ZONE_TREE_FARM`):** 3-tap mother-to-clone tray spawning, vegetative batch location tracking, gram-accurate mass-balance extraction/processing transformations, dual-witness destruction logging, and Health Canada CTLS / CRA Excise B300 reporting.
 
@@ -500,9 +500,20 @@ enum InventoryAvailabilityState {
 
 enum EbaySyncState {
   NOT_LISTED
-  SYNDICATED_LIVE
-  EXPORT_LOCK_PENDING       // Waiting for automated eBay API 200 OK (Phase 3) or manual delist check (Phase 1)
-  EXPORT_LOCK_CONFIRMED     // Verified zero quantity on eBay; safe to seal pallet
+  SYNDICATED_LIVE           // Live on eBay Motors (via Phase 1A Bulk CSV or Phase 2A Inventory API)
+  DELIST_PENDING            // Sold locally/offline; OutboxEvent emitted, awaiting quantity=0 confirmation
+  DELISTED                  // Confirmed ended/zeroed on eBay Motors after domestic sale
+  EXPORT_LOCK_PENDING       // Waiting for automated eBay API 200 OK (Phase 2A+) or manual delist check (Phase 1B)
+  EXPORT_LOCK_CONFIRMED     // Verified zero quantity on eBay; safe to seal export pallet
+
+  @@schema("salvage")
+}
+
+enum ClassifiedsSyncState {
+  NOT_POSTED
+  POSTED_LIVE               // Posted to FB Marketplace / Kijiji via 1-Click Share or Chrome Extension
+  DELIST_REQUIRED           // Sold at checkout; operator must mark local FB/Kijiji ad as sold
+  DELISTED                  // Confirmed removed/marked sold on local classifieds
 
   @@schema("salvage")
 }
@@ -567,6 +578,7 @@ model Vehicle {
   operationalLane             OperationalLane
   lifecycleState              AssetLifecycleState        @default(PROPOSED_DEAL)
   availabilityState           InventoryAvailabilityState @default(AVAILABLE)
+  classifiedsSyncState        ClassifiedsSyncState       @default(NOT_POSTED)
   storageLocationId           String?                    @db.Uuid
   storageLocation             StorageLocation?           @relation(fields: [storageLocationId], references: [id])
 
@@ -642,6 +654,7 @@ model Part {
   custodyState               PartCustodyState           @default(STRIPPED_RAW_OFFLINE)
   availabilityState          InventoryAvailabilityState @default(AVAILABLE)
   ebaySyncState              EbaySyncState              @default(NOT_LISTED)
+  classifiedsSyncState       ClassifiedsSyncState       @default(NOT_POSTED)
   complianceState            PartComplianceState        @default(PENDING_ENRICHMENT)
 
   partCategoryName           String                     @default("UNCLASSIFIED")
@@ -1229,28 +1242,35 @@ CREATE POLICY tenant_isolation_cannabis_destruction ON "cannabis"."CannabisDestr
 
 ## 5. Deterministic State Machines & Concurrency Protocols
 
-### 5.1 Two-Phase Marketplace-to-Export Lock (Preventing Double-Selling)
+### 5.1 Anti-Double-Sale Delist Sync (Domestic/eBay) & Pre-Paid Export Lock
 
-An external HTTP request to eBay cannot run inside a PostgreSQL transaction. To prevent double-selling between eBay Motors and outbound Trinidad pallets, the system enforces a **Two-Phase Reservation State Machine** across the orthogonal `ebaySyncState`, `custodyState`, and `availabilityState` axes:
+An external HTTP request to eBay cannot run inside a PostgreSQL transaction. To prevent double-selling across local Ottawa cash checkouts (`DOMESTIC_ORIGIN`), eBay Motors (`EBAY_MOTORS_SHIPPED`), local classifieds (`FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL`), and pre-paid export pallets, the system enforces deterministic state transitions across `ebaySyncState`, `classifiedsSyncState`, `custodyState`, and `availabilityState`:
 
 ```text
-[ebaySyncState: SYNDICATED_LIVE]
+[ebaySyncState: SYNDICATED_LIVE] ◄── (Phase 1A: Exported via eBay Bulk CSV / Phase 2A: eBay Inventory API)
            │
-           │ (Worker scans part for Trinidad export OR B2B buyer reserves)
-           ▼
-  [EXPORT_LOCK_PENDING]  ───(Phase 3: Writes OutboxEvent in same DB TX)───► BullMQ Worker calls eBay API
-           │             ───(Phase 1: Supervisor manual delist check)       (bulkUpdatePriceQuantity = 0)
-           ├──────────────────────┬──────────────────────────────────────┘
-           │                      │
-           ▼ (eBay 200 OK /       ▼ (eBay Order Webhook arrived first!)
-              Manual Confirm)
-[EXPORT_LOCK_CONFIRMED]   [availabilityState: COMMITTED_DOMESTIC_SALE]
-           │                      │
-           ▼                      ▼
-[custodyState: ON_EXPORT_PALLET] (Pushes Alert to Yard PWA: "PULL PART FROM PALLET — SOLD ON EBAY")
+           ├──► (Path A: Sold at Domestic Checkout — FR-CHK-01)
+           │       ├── Sets custodyState = SOLD_AND_RELEASED, availabilityState = PAID_SETTLED
+           │       ├── Sets ebaySyncState = DELIST_PENDING & emits OutboxEvent(PartSoldLocallyDelistEbayRequested)
+           │       ├── If classifiedsSyncState == POSTED_LIVE -> sets classifiedsSyncState = DELIST_REQUIRED
+           │       └── Phase 1A Urgent Delist Banner / Phase 2A BullMQ eBay API 200 OK -> [DELISTED]
+           │
+           └──► (Path B: Scanned onto Pre-Paid Export Pallet — FR-LOG-01 + RULE-EXP-001)
+                   ▼
+          [EXPORT_LOCK_PENDING]  ───(Phase 2A+: Writes OutboxEvent in same DB TX)──► BullMQ Worker calls eBay API
+                   │             ───(Phase 1B: Supervisor manual delist check)       (bulkUpdatePriceQuantity = 0)
+                   ├──────────────────────┬──────────────────────────────────────┘
+                   │                      │
+                   ▼ (eBay 200 OK /       ▼ (eBay Order Webhook arrived first!)
+                      Manual Confirm)
+        [EXPORT_LOCK_CONFIRMED]   [availabilityState: COMMITTED_DOMESTIC_SALE]
+                   │                      │
+                   ▼                      ▼
+        [custodyState: ON_EXPORT_PALLET] (Pushes Alert to Yard PWA: "PULL PART FROM PALLET — SOLD ON EBAY")
 ```
 
-* **Physical Seal Gate Rule:** `ShipmentPallet.sealedAt` CANNOT be populated if any child `Part` on that pallet has `ebaySyncState == 'EXPORT_LOCK_PENDING'` or `custodyState == 'STRIPPED_RAW_OFFLINE'`. All parts must reach `EXPORT_LOCK_CONFIRMED` (or `NOT_LISTED`) before a pallet can be sealed.
+* **Pre-Paid Origin Export Gate (`RULE-EXP-001`):** When `exportPolicy.exportFulfillmentMode == 'PREPAID_ORIGIN_ONLY'` (the default while no family-operated destination vault is active), `ShipmentPallet.sealedAt` and `Shipment.departedAt` CANNOT be populated unless 100% of items on the shipment have verified upfront CAD/USD payment settled in `SETTLED_ORIGIN_CORP_BANK` (or an explicit `ARCHITECT_CFO` verified-deposit override), eliminating overseas consignment credit risk.
+* **Physical Seal Gate Rule:** `ShipmentPallet.sealedAt` CANNOT be populated if any child `Part` on that pallet has `ebaySyncState == 'EXPORT_LOCK_PENDING'` or `custodyState == 'STRIPPED_RAW_OFFLINE'`. All parts must reach `EXPORT_LOCK_CONFIRMED` (or `NOT_LISTED` / `DELISTED`) before a pallet can be sealed.
 * **Online vs. Offline Initial `PartCustodyState` Assignment:** During 3-tap part intake (`FR-INT-02`), if the worker scans both the part QR (`PRT-XXXXXX`) and a valid destination storage bin QR (`toLocationBarcode`, e.g., `KEMP-C01-R01-S01-B01`) while online (or upon server sync of the intake + bin scan), `Part.custodyState` transitions immediately to `SHELVED_ORIGIN_CONTAINER` (and `storageLocationId` is populated). `STRIPPED_RAW_OFFLINE` is strictly a transient state for parts captured without a destination bin scan or queued locally in IndexedDB awaiting server reconciliation.
 
 ### 5.2 Offline Custody Chain, Data-Driven Site Zoning Guard & Conflict Resolution
@@ -1263,12 +1283,13 @@ An external HTTP request to eBay cannot run inside a PostgreSQL transaction. To 
 
 The unified mobile checkout workflow (`/checkout`) adapts dynamically based on the scanned item's custody location (`marketNode`):
 
-1. **Domestic Origin Mode (`marketNode == 'DOMESTIC_ORIGIN'`):**
-   * **Context & Channel Attribution:** Triggered when `HUNTER_MECHANIC` or `ARCHITECT_CFO` scans a `PRT-XXXXXX` part or `AST-XXXXXX` whole vehicle located in Ontario (`KEMP` or `RAMS`). The UI defaults to `CAD` and presents `DomesticSaleChannel` selector pills (`LOCAL_WALK_IN_CASH`, `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL`, `RETAIL_LOT_VEHICLE_SALE`, `WHOLESALE_MECHANIC_NETWORK`).
-   * **Immediate eBay Delist Outbox:** If any sold part is currently active on eBay (`ebaySyncState == 'SYNDICATED_LIVE'`), the checkout transaction atomically transitions the part to `custodyState = 'SOLD_AND_RELEASED'`, `availabilityState = 'PAID_SETTLED'`, and writes an `OutboxEvent` (`PartSoldLocallyDelistEbayRequested`) to immediately zero out the eBay Motors offer, preventing online double-sales.
-   * **Operator Float & Cash Custody Tracking:** Cash collected in person sets `cashCustodyState = 'HELD_IN_OPERATOR_FLOAT'`, creating an auditable shop petty-cash float that can be drawn down when logging shop `Expense` receipts (`paidFromCashCustody = 'HELD_IN_OPERATOR_FLOAT'`). Interac e-Transfers and wires default to `SETTLED_ORIGIN_CORP_BANK`.
-   * **Whole-Vehicle Lot Release & Self-Funding Working Capital Credit:** Whole-vehicle retail sales (`RETAIL_LOT_VEHICLE_SALE`) enforce uploading a signed Bill of Sale (`billOfSaleStorageKey`), transition the `Vehicle` to `lifecycleState = 'SOLD_RETAIL_ONTARIO'` and `availabilityState = 'PAID_SETTLED'` (freeing 1 of the 8 Ramsayville shop lot slots), and credit `netRealizedCadMinor` (`grossCollectedMinor - platformFeeMinor - shippingCostMinor`) toward the donor VIN's Break-Even Velocity counter and the **Self-Funding Working Capital Pool** (`AvailableWorkingCapital_CAD`). Because there is no separate warehouse security gate in Ontario, `isPaymentVerified` is set to `true` and `gateReleasedAt = now()` upon receipt upload.
-2. **Destination Export Vault Mode (`marketNode == 'DESTINATION_EXPORT_VAULT'`):**
+1. **Domestic Origin Mode (`marketNode == 'DOMESTIC_ORIGIN'` — Primary Phase 1A Active Node):**
+   * **Context & Channel Attribution:** Triggered when `HUNTER_MECHANIC` or `ARCHITECT_CFO` scans a `PRT-XXXXXX` part or `AST-XXXXXX` whole vehicle located in Ontario (`KEMP` or `RAMS`). The UI defaults to `CAD` and presents `DomesticSaleChannel` selector pills (`LOCAL_WALK_IN_CASH`, `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL`, `RETAIL_LOT_VEHICLE_SALE`, `WHOLESALE_MECHANIC_NETWORK`, `EBAY_MOTORS_SHIPPED`, `CAR_PART_WHOLESALE`).
+   * **Ontario 3-Tier Price Floor & 10% Negotiation Corridor:** Evaluates `grossCollectedMinor` against `retailPriceCadMinor` (`floorPriceAtCheckoutMinor`): discounts up to `domesticAdminDiscountToleranceBps = 1000` ($10\%$) are permitted for `HUNTER_MECHANIC` with a mandatory `discountReasonCode`; discounts $> 10\%$ require `ARCHITECT_CFO` or a CFO override (`FLOOR_PRICE_OVERRIDE_REQUIRED`).
+   * **Immediate eBay & Local Classifieds Delist Sync:** Atomically transitions sold parts to `custodyState = 'SOLD_AND_RELEASED'` and `availabilityState = 'PAID_SETTLED'`. If `ebaySyncState == 'SYNDICATED_LIVE'`, transitions `ebaySyncState` to `'DELIST_PENDING'` and writes an `OutboxEvent` (`PartSoldLocallyDelistEbayRequested`) to immediately zero out the eBay Motors offer (via Urgent Delist Banner in Phase 1A and automated BullMQ eBay API worker in Phase 2A). If `classifiedsSyncState == 'POSTED_LIVE'`, transitions `classifiedsSyncState` to `'DELIST_REQUIRED'` so local FB/Kijiji ads are removed without delay.
+   * **Operator Float & Cash Custody Tracking:** Cash collected in person sets `cashCustodyState = 'HELD_IN_OPERATOR_FLOAT'`, creating an auditable shop petty-cash float that can be drawn down when logging shop `Expense` receipts (`paidFromCashCustody = 'HELD_IN_OPERATOR_FLOAT'`) or offset against partner profit draws (`RULE-PAY-003`). Interac e-Transfers, wires, and eBay Managed Payouts default to `SETTLED_ORIGIN_CORP_BANK`.
+   * **Whole-Vehicle Lot Release & Self-Funding Working Capital Credit:** Whole-vehicle retail sales (`RETAIL_LOT_VEHICLE_SALE`) enforce uploading a signed Bill of Sale (`billOfSaleStorageKey`), transition the `Vehicle` to `lifecycleState = 'SOLD_RETAIL_ONTARIO'` and `availabilityState = 'PAID_SETTLED'` (freeing 1 of the 8 Ramsayville shop lot slots, and flagging `classifiedsSyncState = 'DELIST_REQUIRED'` if posted), and credit `netRealizedCadMinor` (`grossCollectedMinor - platformFeeMinor - shippingCostMinor`) toward the donor VIN's Break-Even Velocity counter and the **Self-Funding Working Capital Pool** (`AvailableWorkingCapital_CAD`). Because there is no separate warehouse security gate in Ontario, `isPaymentVerified` is set to `true` and `gateReleasedAt = now()` upon receipt upload.
+2. **Destination Export Vault Mode (`marketNode == 'DESTINATION_EXPORT_VAULT'` — Schema-Ready / Dormant Until Phase 3 Overseas Vault Activation):**
    * **Strict Separation of Duties & MFA `aal2` Enforcement:** Users with `HUNTER_MECHANIC` or `OVERSEAS_B2B_BUYER` roles are hard-blocked at the API and RLS layers from mutating `SaleTransaction.isPaymentVerified` when `marketNode == 'DESTINATION_EXPORT_VAULT'`. Only `TRINIDAD_VAULT_ADMIN` or `ARCHITECT_CFO` holding an active Supabase Auth JWT with Authenticator Assurance Level 2 (`aal2`) can verify payment.
    * **3-Tier Price Floor Evaluation & Negotiation Corridor (`checkoutPolicy`):**
      1. **Tier 1 (At or Above Floor):** `grossCollectedMinor >= floorPriceAtCheckoutMinor` $\rightarrow$ Passes automatically (`discountReasonCode = null`).
@@ -1361,6 +1382,16 @@ export interface PricingAndCompliancePolicy {
     vaultAdminMaxDiscountCapTtdMinor: number;
     domesticAdminDiscountToleranceBps: number;
   };
+  exportPolicy: {
+    exportFulfillmentMode: 'PREPAID_ORIGIN_ONLY' | 'BONDED_DESTINATION_VAULT_COD';
+    requireFullPrepaymentBeforeShipmentSeal: boolean;
+  };
+  domesticSyndication: {
+    publicPickupLocationLabel: string; // e.g., "Ramsayville / East Ottawa, ON" (RULE-MKT-002 Kemptville stealth)
+    heavyLocalOnlyThresholdKg: number; // e.g., 15.0 (< 15kg -> eBay Motors, >= 15kg -> Local Classifieds)
+    ebaySiteId: string;                // e.g., "Canada"
+    ebayCurrency: 'CAD' | 'USD';
+  };
   siteZoningLimits: {
     kemptvilleMaxUncrushedShellsOnPad: number;
     kemptvilleContainerCount: number;
@@ -1438,7 +1469,56 @@ export interface IVisionEnrichmentPort {
 }
 
 /**
- * 3. MARKETPLACE SYNDICATION PORT
+ * 3. ZERO-TYPING DOMESTIC SYNDICATION TEMPLATE PORT (PHASE 1A DAY-1 BRIDGE)
+ * Deterministically generates <= 80-char SEO eBay titles, HTML descriptions, eBay Seller Hub
+ * File Exchange CSV rows, and bylaw-stealth ("Ramsayville / East Ottawa, ON") local classified
+ * ad payloads from decoded NHTSA VIN/HIN specs + part category + ARA condition grade.
+ */
+export interface ISyndicationTemplatePort {
+  buildPartSyndicationCopy(input: {
+    qrSkuCode: string;
+    partCategoryName: string;
+    oemPartNumbers: string[];
+    araGrade: 'GRADE_A' | 'GRADE_B1' | 'GRADE_B2' | 'GRADE_B3' | 'GRADE_C' | 'GRADE_X';
+    araDamageCode: string;
+    weightKg: number;
+    retailPriceCadMinor: number;
+    sanitizedPublicImageUrls: string[];
+    donorVehicle: {
+      year: number;
+      make: string;
+      model: string;
+      trim?: string | null;
+      engineSpec?: string | null;
+      vinOrHin: string;
+      odometerKm?: number | null;
+      engineHours?: number | null;
+    };
+    publicPickupLocationLabel: string;
+    heavyLocalOnlyThresholdKg: number;
+  }): {
+    recommendedPrimaryChannel: 'EBAY_MOTORS_SHIPPED' | 'FB_MARKETPLACE_LOCAL';
+    ebaySeoTitle80: string;
+    ebayHtmlDescription: string;
+    localClassifiedsTitle: string;
+    localClassifiedsBody: string;
+    publicPickupLocationLabel: string;
+  };
+  exportEbaySellerHubCsv(parts: Array<{
+    qrSkuCode: string;
+    ebaySeoTitle80: string;
+    ebayHtmlDescription: string;
+    partCategoryName: string;
+    oemPartNumbers: string[];
+    araGrade: string;
+    retailPriceCadMinor: number;
+    sanitizedPublicImageUrls: string[];
+    make: string;
+  }>): string;
+}
+
+/**
+ * 4. LIVE MARKETPLACE API SYNDICATION PORT (PHASE 2A AUTOMATED EBAY API)
  * Uses eBay Inventory API + Browse API (Active competitor pricing fallback,
  * avoiding reliance on restricted Marketplace Insights API).
  */
@@ -1453,7 +1533,7 @@ export interface IMarketplacePort {
 }
 
 /**
- * 4. EXTERNAL ACCOUNTING GL SYNC PORT
+ * 5. EXTERNAL ACCOUNTING GL SYNC PORT
  * Syncs verified operational subledger transactions to QuickBooks Online / Xero.
  */
 export interface IAccountingGlPort {
