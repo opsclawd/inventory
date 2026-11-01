@@ -1,28 +1,28 @@
 # Unified Operations & Compliance ERP
 
-Multi-tenant physical inventory, chain-of-custody, and unit-economics platform operating both the Canada-First Ontario Auto/Marine Salvage, eBay/Classifieds Syndication, Domestic Flips & Pre-Paid Direct Export venture (`ORG_SALVAGE_EXPORT` — `salvage` schema, with optional overseas Destination Bonded Vault node dormant until Phase 3) and the Brockville/Kemptville Health Canada Cannabis Nursery & Processing venture (`ORG_CANNABIS_NURSERY_PROC` — `cannabis` schema), architected with commercial vertical-SaaS generalizations on a shared operational core (`shared` schema).
+Reusable multi-tenant physical inventory, chain-of-custody, and unit-economics ERP platform serving two independent legal corporations operating at separate physical facilities—the Kemptville Auto/Marine Salvage, Syndication, Domestic Flips & Pre-Paid Direct Export corporation (`ORG_SALVAGE_EXPORT` — `salvage` schema at `KEMP`, with `RAMS` preserved as a salvage-only retail/fulfillment concept pending operational verification and `POSV` retained as a dormant future salvage-export vault) and the Brockville Cannabis Cultivation & Processing corporation (`ORG_CANNABIS_NURSERY_PROC` — `cannabis` schema exclusively at `BROCK`, subject to its actual Health Canada licence)—built on shared software infrastructure (`shared` schema) with zero shared physical warehouses, combined inventory, or pooled corporate finances (`ADR-0004`).
 
-## Shared Operations, Policy Configuration & Physical Custody (`shared` Schema)
+## Shared Software Infrastructure, Policy Configuration & Physical Custody (`shared` Schema)
 
 **Organization**:
-A distinct legal and regulatory business entity (`OrganizationType`: `SALVAGE_AND_EXPORT` or `CANNABIS_NURSERY_AND_PROCESSING`, identified by `slug` and `code`) whose inventory, locations, expenses, and audit logs are strictly isolated via PostgreSQL multi-schema partitioning and Row-Level Security (RLS), with optional per-tenant JSON policy overrides (`policyConfigJson`).
-_Avoid_: Tenant, company, workspace, account
+An independent legal business corporation (`OrganizationType`: `SALVAGE_AND_EXPORT` or `CANNABIS_NURSERY_AND_PROCESSING`, distinguishing software tenant `slug` from corporate `legalEntityName`, CRA BN15, and regulatory licences) whose inventory, physical locations, cash balances, expenses, and audit logs are strictly isolated via PostgreSQL multi-schema partitioning and default-deny Row-Level Security (RLS).
+_Avoid_: Tenant, company, workspace, account, co-owned venture
 
 **Organization Membership**:
-The binding between a User and an Organization that assigns the User's `UserRole` within that entity and governs which workspaces appear in the top-left Organization Workspace Switcher.
-_Avoid_: Team role, user tenant link, account access
+The explicit per-corporation authorization binding (`OrganizationMembership`) between an authenticated `User` principal and an `Organization` that assigns the User's `UserRole` within that legal entity; common personnel across corporations are never assumed, and the header Organization Workspace Switcher renders only when a User holds active memberships in more than one `Organization`.
+_Avoid_: Team role, user tenant link, account access, assumed dual-partner access
 
 **Policy Configuration Port (`IPolicyConfigPort`)**:
 The hexagonal port (`getPolicyForOrg(organizationId)`) that loads versioned tariff, FX, margin, compensation, self-funding working capital gate, tiered expense voucher, checkout negotiation corridor, site capacity, and cannabis mass-balance parameters from `src/core/config/pricing-policy.json` merged with any tenant-specific `Organization.policyConfigJson` overrides.
 _Avoid_: Hardcoded constants, env config, global settings
 
 **Storage Location**:
-A scannable hierarchical physical slot (`Site -> Zone -> Container/Room -> Rack -> Shelf/Table -> Bin`) where a Vehicle, Part, or Cannabis Lot resides, governed by three data-driven columns: `allowedOrgType` (`SALVAGE_AND_EXPORT` vs. `CANNABIS_NURSERY_AND_PROCESSING`), `allowsWholeVehicleDismantling` (`true` on Ramsayville sealed concrete, `false` on the Kemptville dry container warehouse per `O. Reg. 85/16`), and `maxActiveAssetCapacity` (`0` whole vehicles on the Kemptville Pad, `8` on the Ramsayville Shop/Lot, and `null` on shelf bins).
-_Avoid_: Bin, shelf, warehouse spot, address
+A scannable hierarchical physical slot (`Site -> Zone -> Container/Room -> Rack -> Shelf/Table -> Bin`) owned by a single `Organization` (`KEMP` primary salvage facility, salvage-only `RAMS` concept subject to confirmation, dormant salvage `POSV` vault, or `BROCK` cannabis facility) and governed by data-driven `organizationId`, `allowedOrgType`, `allowsWholeVehicleDismantling`, and `maxActiveAssetCapacity` attributes without hardcoded location-name conditionals.
+_Avoid_: Bin, shelf, warehouse spot, address, shared warehouse
 
 **Site Zoning & Zero-Fluid Farm Rule (`RULE-ZONE-001` & `RULE-ENV-001`)**:
-The data-driven physical and environmental boundary enforced by `StorageLocation.allowedOrgType` (always hard-blocking cross-tenant scans with `422 SITE_ZONING_VIOLATION`) and `StorageLocation.allowsWholeVehicleDismantling` (keeping Kemptville `ZONE_CONTAINER_PAD` strictly a dry clean-parts container warehouse under `O. Reg. 85/16`, appending `COMPLIANCE_WARNING_UNDRAINED_FARM` in `WARN_ONLY` mode if a whole `AUTOMOBILE` or undrained powertrain is scanned there).
-_Avoid_: Hardcoded site check, property split, yard section
+The data-driven multi-tenant facility and environmental boundary enforced by `StorageLocation.organizationId` and `StorageLocation.allowedOrgType` (always hard-blocking cross-corporation or mismatched-domain scans with `422 SITE_ZONING_VIOLATION`) alongside configurable `StorageLocation.allowsWholeVehicleDismantling` (appending `COMPLIANCE_WARNING_UNDRAINED_FARM` in `WARN_ONLY` mode if a whole `AUTOMOBILE` or undrained powertrain is scanned into a dry-storage container location under `O. Reg. 85/16`).
+_Avoid_: Hardcoded site check, property split, yard section, shared parcel zoning
 
 **Physical Custody Agility Mode (`complianceEnforcementMode`)**:
 The organization-level policy flag (`"WARN_ONLY" | "STRICT_BLOCK"`, defaulting to `"WARN_ONLY"` in Phase 1A) ensuring physical custody scans and lifecycle state transitions never throw blocking HTTP `422` errors when regulatory paperwork or timestamps lag—appending structured `complianceWarnings` (`COMPLIANCE_WARNING_UNDRAINED_FARM`, `MISSING_HTA_S60_DOCS`, `UNRECONCILED_CATALYTIC_CONVERTER`, `DRIVEON_SAFETY_CERT_WARNING`) for asynchronous CFO review while keeping PostgreSQL 100% aligned with physical yard truth.
@@ -87,7 +87,7 @@ The explicit confirmation (`oemFitmentVerified = true`) that a `Part`'s stamped 
 _Avoid_: Universal fit, compatibility check, part match
 
 **Uncrushed Hulk**:
-A stripped donor `Vehicle` shell (`HULK_AWAITING_SCRAP`) at Ramsayville prior to being weighed and hauled away by a scrap metal recycler (`SCRAPPED_METAL_CLEARED`).
+A stripped donor `Vehicle` shell (`HULK_AWAITING_SCRAP`) within `ORG_SALVAGE_EXPORT` prior to being weighed and hauled away by a scrap metal recycler (`SCRAPPED_METAL_CLEARED`).
 _Avoid_: Carcass, shell, bare metal, scrap car
 
 **HTA Section 60 Garage & Wrecking Register**:
@@ -103,7 +103,7 @@ The deterministic Day-1 listing pipeline that joins decoded donor specs, part ca
 _Avoid_: Manual listing draft, ad scraper, CSV dump
 
 **Geolocation Bylaw Stealth (`RULE-MKT-002`)**:
-The municipal compliance rule that strips EXIF GPS coordinates from public product photos and masks the rural Kemptville dismantling yard behind the `"Ramsayville / East Ottawa, ON"` pickup location on all local classified listings.
+The municipal compliance rule that strips EXIF GPS coordinates from public product photos and masks exact rural Kemptville (`KEMP`) storage coordinates behind the configurable `domesticTaxPolicy.publicPickupCityLabel` / `domesticSyndication.publicPickupLocationLabel` (default `"Ottawa South / Hwy 416 Corridor"`) on all local classified listings.
 _Avoid_: Fake address, hidden yard, location spoof
 
 **Two-Phase Export Lock**:
@@ -111,7 +111,7 @@ The reservation protocol that blocks an eBay-listed `Part` from being sealed int
 _Avoid_: eBay sync, delist lock, inventory hold
 
 **Local Ad Payload**:
-A pre-formatted bundle of SEO title, CAD ask price (`retailPriceCadMinor`), `"Ramsayville / East Ottawa, ON"` pickup label, OEM fitment notes, and EXIF-stripped `R2_PUBLIC_MEDIA_BUCKET` WebP URLs consumed by the Local Classifieds Queue (`FR-MKT-00`) and Manifest V3 Chrome Extension (`FR-MKT-02`) to publish Facebook Marketplace (`FB_MARKETPLACE_LOCAL`) and Kijiji (`KIJIJI_LOCAL`) listings.
+A pre-formatted bundle of SEO title, CAD ask price (`retailPriceCadMinor`), configurable `publicPickupLocationLabel`, OEM fitment notes, and EXIF-stripped `R2_PUBLIC_MEDIA_BUCKET` WebP URLs consumed by the Local Classifieds Queue (`FR-MKT-00`) and Manifest V3 Chrome Extension (`FR-MKT-02`) to publish Facebook Marketplace (`FB_MARKETPLACE_LOCAL`) and Kijiji (`KIJIJI_LOCAL`) listings.
 _Avoid_: FB post, Kijiji draft, scraper template
 
 ## Export Logistics & Destination Bonded Vault (`salvage` Schema)
@@ -188,16 +188,16 @@ Every vehicle acquisition enforces `minCashReserveFloorCadMinor` ($\$7,500\text{
 _Avoid_: Bi-monthly infusion, recurring investor top-up, slush fund
 
 **Deferred Inter-Company Lease Accrual (`ITA s. 78(1)`)**:
-A related-party container pad (`Small Roots Inc.`) or ERP/equipment (`Calgary IT HoldCo`) `Expense` flagged `isDeferredIntercompanyAccrual = true` (`accrualSettledAt = null`) that accrues on the GL balance sheet without reducing liquid buying power in `AvailableWorkingCapital_CAD` until settled in cash.
-_Avoid_: Forgiven rent, off-ledger lease, free yard use
+A container-pad rent or software/equipment lease `Expense` incurred within an `Organization`'s independent corporate books and flagged `isDeferredIntercompanyAccrual = true` (`accrualSettledAt = null`) that accrues on its GL balance sheet without reducing liquid buying power in `AvailableWorkingCapital_CAD` until settled in cash (subject to counterparty `ITA s. 78(1)` tax verification).
+_Avoid_: Forgiven rent, off-ledger lease, free yard use, cross-entity subsidy
 
 **Ontario HST Trust Ring-Fencing (`RULE-TAX-HST-01`)**:
 The tax accounting invariant (`isOntarioEntityHstRegistered = true`, `13%` rate) requiring `taxOrVatMinor` collected on `DOMESTIC_ORIGIN` sales to be isolated in a CRA HST Payable Trust liability counter and strictly excluded from `netRealizedCadMinor`, `AvailableWorkingCapital_CAD`, and `DistributableRealizedProfitPool_CAD`.
 _Avoid_: Tax-inclusive margin, spendable HST, gross revenue profit
 
 **Operator Float (`HELD_IN_OPERATOR_FLOAT`)**:
-Physical domestic cash collected from local sales (`SaleTransaction.grossCollectedMinor`) and cash scrap recycler payouts (`ScrapComponentLog.payoutCadMinor`) held in the field operator's custody (e.g., Taz's Ontario Shop Float) as an auditable petty-cash subledger balance that can fund receipted/vouchered shop expenses (`paidFromCashCustody = 'HELD_IN_OPERATOR_FLOAT'`), offset partner draws (`RULE-PAY-003`), or be swept to `SETTLED_ORIGIN_CORP_BANK` via `CashCustodyTransfer`.
-_Avoid_: Shop cash, pocket cash, petty cash, local float
+Physical domestic cash collected within `ORG_SALVAGE_EXPORT` from local sales (`SaleTransaction.grossCollectedMinor`) and cash scrap recycler payouts (`ScrapComponentLog.payoutCadMinor`) held in the salvage field operator's custody as an auditable petty-cash subledger balance that can fund receipted/vouchered shop expenses (`paidFromCashCustody = 'HELD_IN_OPERATOR_FLOAT'`), offset partner draws (`RULE-PAY-003`), or be swept to `SETTLED_ORIGIN_CORP_BANK` via `CashCustodyTransfer`.
+_Avoid_: Shop cash, pocket cash, petty cash, local float, shared entity float
 
 **Two-Stage Pro-Rata Donor Cost Allocation**:
 The accounting algorithm (`DOMAIN-RULES.md` Section 4.4) that resolves the timing gap between stripping a part on Day 2 and scrapping the hulk on Day 14:
@@ -213,7 +213,7 @@ _Avoid_: Stripper wage, hourly yard pay, dismantling fee
 A founder compensation disbursement (`PARTNER_PROFIT_DRAW`) restricted strictly to positive `DistributableRealizedProfitPool_CAD` (`RULE-PAY-002`, protecting `initialSeedCapitalCadMinor`) and automatically netted against any outstanding `HELD_IN_OPERATOR_FLOAT` balance (`RULE-PAY-003`) before corporate bank cash is disbursed.
 _Avoid_: Owner salary, founder wage, partner payout
 
-## Cannabis Nursery & Processing (`cannabis` Schema)
+## Brockville Cannabis Cultivation & Processing (`cannabis` Schema — `ORG_CANNABIS_NURSERY_PROC`)
 
 **Cannabis Strain**:
 A distinct genetic cultivar (`CannabisStrain`) registered within `ORG_CANNABIS_NURSERY_PROC` defining lineage, target cannabinoid percentages, and terpene profile for mother plants and downstream lots.
