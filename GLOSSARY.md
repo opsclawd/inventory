@@ -17,15 +17,15 @@ The hexagonal port (`getPolicyForOrg(organizationId)`) that loads versioned tari
 _Avoid_: Hardcoded constants, env config, global settings
 
 **Storage Location**:
-A scannable hierarchical physical slot (`Site -> Zone -> Container/Room -> Rack -> Shelf/Table -> Bin`) owned by a single `Organization` (`KEMP` primary salvage facility, salvage-only `RAMS` concept subject to confirmation, dormant salvage `POSV` vault, or `BROCK` cannabis facility) and governed by data-driven `organizationId`, `allowedOrgType`, `allowsWholeVehicleDismantling`, and `maxActiveAssetCapacity` attributes without hardcoded location-name conditionals.
+A scannable hierarchical physical slot (`Site -> Zone -> Container/Room -> Rack -> Shelf/Table -> Bin`) owned by a single `Organization` (`KEMP` active primary salvage facility, salvage-only `RAMS` concept gated behind `PROPOSED_INACTIVE` until municipal zoning/licensing is verified, dormant salvage `POSV` vault, or `BROCK` cannabis facility) and governed by data-driven `organizationId`, `allowedOrgType`, `locationOperationalStatus`, `allowsWholeVehicleDismantling`, and `maxActiveAssetCapacity` attributes without hardcoded location-name conditionals.
 _Avoid_: Bin, shelf, warehouse spot, address, shared warehouse
 
 **Site Zoning & Zero-Fluid Farm Rule (`RULE-ZONE-001` & `RULE-ENV-001`)**:
-The data-driven multi-tenant facility and environmental boundary enforced by `StorageLocation.organizationId` and `StorageLocation.allowedOrgType` (always hard-blocking cross-corporation or mismatched-domain scans with `422 SITE_ZONING_VIOLATION`) alongside configurable `StorageLocation.allowsWholeVehicleDismantling` (appending `COMPLIANCE_WARNING_UNDRAINED_FARM` in `WARN_ONLY` mode if a whole `AUTOMOBILE` or undrained powertrain is scanned into a dry-storage container location under `O. Reg. 85/16`).
+The data-driven multi-tenant facility and environmental boundary enforced by `StorageLocation.organizationId` and `StorageLocation.allowedOrgType` (always hard-blocking cross-corporation or mismatched-domain scans with `422 SITE_ZONING_VIOLATION`) alongside configurable `StorageLocation.locationOperationalStatus` and `StorageLocation.allowsWholeVehicleDismantling` (appending `PROPOSED_INACTIVE_LOCATION_WARNING` or `COMPLIANCE_WARNING_UNDRAINED_FARM` in `WARN_ONLY` mode when an unverified site or dry-storage container location is selected).
 _Avoid_: Hardcoded site check, property split, yard section, shared parcel zoning
 
 **Physical Custody Agility Mode (`complianceEnforcementMode`)**:
-The organization-level policy flag (`"WARN_ONLY" | "STRICT_BLOCK"`, defaulting to `"WARN_ONLY"` in Phase 1A) ensuring physical custody scans and lifecycle state transitions never throw blocking HTTP `422` errors when regulatory paperwork or timestamps lag—appending structured `complianceWarnings` (`COMPLIANCE_WARNING_UNDRAINED_FARM`, `MISSING_HTA_S60_DOCS`, `UNRECONCILED_CATALYTIC_CONVERTER`, `DRIVEON_SAFETY_CERT_WARNING`) for asynchronous CFO review while keeping PostgreSQL 100% aligned with physical yard truth.
+The organization-level policy flag (`"WARN_ONLY" | "STRICT_BLOCK"`, defaulting to `"WARN_ONLY"` in Phase 1A) ensuring physical custody scans and lifecycle state transitions never throw blocking HTTP `422` errors when regulatory paperwork or registrations lag—appending structured `complianceWarnings` (`COMPLIANCE_WARNING_UNDRAINED_FARM`, `PROPOSED_INACTIVE_LOCATION_WARNING`, `MISSING_HTA_S60_DOCS`, `MISSING_EASR_REGISTRATION_WARNING`, `UNRECONCILED_CATALYTIC_CONVERTER`, `DRIVEON_SAFETY_CERT_WARNING`) for asynchronous CFO review while keeping PostgreSQL 100% aligned with physical yard truth.
 _Avoid_: Disabled validation, silent ignore, skipped compliance
 
 **Custody Event**:
@@ -71,12 +71,20 @@ _Avoid_: Track, workflow, strategy, vehicle type
 
 **Orthogonal Part State Axes**:
 The five independent state dimensions governing a `Part` simultaneously without state-explosion:
-1. **`PartCustodyState` (Physical Custody):** `STRIPPED_RAW_OFFLINE`, `SHELVED_ORIGIN_CONTAINER`, `ON_EXPORT_PALLET`, `IN_TRANSIT_OCEAN_FREIGHT`, `CUSTOMS_HOLD_DESTINATION`, `SHELVED_DESTINATION_VAULT`, `SOLD_AND_RELEASED`, `SCRAPPED_OR_DAMAGED`.
+1. **`PartCustodyState` (Physical Custody):** `STRIPPED_RAW_OFFLINE`, `SHELVED_ORIGIN_CONTAINER`, `ON_EXPORT_PALLET`, `IN_TRANSIT_OCEAN_FREIGHT`, `CUSTOMS_HOLD_DESTINATION`, `SHELVED_DESTINATION_VAULT`, `SOLD_AND_RELEASED`, `RESTOCKED_QC_HOLD`, `SCRAPPED_OR_DAMAGED`.
 2. **`InventoryAvailabilityState` (Commercial Reservation/Sale):** `AVAILABLE`, `RESERVED_B2B_HOLD`, `COMMITTED_DOMESTIC_SALE`, `PENDING_VAULT_COD_PAYMENT`, `PAID_SETTLED`.
-3. **`EbaySyncState` (eBay Motors Delist & Export Lock):** `NOT_LISTED`, `SYNDICATED_LIVE`, `DELIST_PENDING`, `DELISTED`, `EXPORT_LOCK_PENDING`, `EXPORT_LOCK_CONFIRMED`.
+3. **`EbaySyncState` (eBay Motors Delist & Export Lock):** `NOT_LISTED`, `CSV_EXPORTED_PENDING_CONFIRMATION`, `SYNDICATED_LIVE`, `DELIST_PENDING`, `DELISTED`, `EXPORT_LOCK_PENDING`, `EXPORT_LOCK_CONFIRMED`.
 4. **`ClassifiedsSyncState` (Local Ottawa Classifieds Delist Queue):** `NOT_POSTED`, `POSTED_LIVE`, `DELIST_REQUIRED`, `DELISTED`.
 5. **`PartComplianceState` (Safety & Enrichment Readiness):** `PENDING_ENRICHMENT`, `NEEDS_HUMAN_REVIEW`, `CLEARED_FOR_SALE`, `QUARANTINED_RECALL_OR_DG`.
 _Avoid_: Part status, single lifecycle enum, item state
+
+**TDG Hazmat Classification (`TdgHazmatCode`)**:
+The Transportation of Dangerous Goods classification on a `Part` (`NONE`, `UN3268_AIRBAG`, `UN0503_PYROTECHNIC`, `UN2794_WET_BATTERY`, `UN3480_LITHIUM_BATTERY`) that hard-blocks courier parcel syndication (`EBAY_MOTORS_SHIPPED`) on hazardous components and restricts non-quarantined batteries to local pickup.
+_Avoid_: Generic hazmat flag, parcel override
+
+**Return QC Hold (`RESTOCKED_QC_HOLD`)**:
+The mandatory post-return `PartCustodyState` that prevents a buyer-returned `Part` from returning to `SHELVED_ORIGIN_CONTAINER` or auto-relisting online until an operator inspects OEM markings against original strip photos to verify no part-swap fraud occurred.
+_Avoid_: Auto-restock, instant relist
 
 **Steering-Side Compatibility**:
 The physical cockpit and traffic-side geometry classification of a `Part` (`UNIVERSAL`, `LHD_ONLY`, or `RHD_ONLY`): both `UNIVERSAL` and `LHD_ONLY` parts are 100% compatible with Canadian/North American buyers, whereas `LHD_ONLY` parts remain gated against Right-Hand-Drive export destinations unless explicitly overridden (`RULE-FIT-001`, `RULE-FIT-002`).
@@ -102,9 +110,9 @@ _Avoid_: Mixed tin payout, lump scrap estimate, unlogged cat sale
 The deterministic Day-1 listing pipeline that joins decoded donor specs, part category, and condition grade into $\le 80$-character SEO eBay titles, eBay Seller Hub Bulk CSV feeds, Day-1 Ottawa/Gatineau B2B Mechanic Powertrain & Front-Clip Sheets (`exportB2bMechanicPowertrainSheet`, zero Solera Hollander licensing), and local classified ad payloads without manual typing.
 _Avoid_: Manual listing draft, ad scraper, CSV dump
 
-**Geolocation Bylaw Stealth (`RULE-MKT-002`)**:
-The municipal compliance rule that strips EXIF GPS coordinates from public product photos and masks exact rural Kemptville (`KEMP`) storage coordinates behind the configurable `domesticTaxPolicy.publicPickupCityLabel` / `domesticSyndication.publicPickupLocationLabel` (default `"Ottawa South / Hwy 416 Corridor"`) on all local classified listings.
-_Avoid_: Fake address, hidden yard, location spoof
+**eBay Ship-From Truth & Classifieds Geolocation Stealth (`RULE-MKT-002`)**:
+The channel-split location disclosure rule requiring eBay Motors Canada (`EBAY_MOTORS_SHIPPED`) exports to declare the true warehouse ship-from location (`Kemptville, ON, K0G 1J0`) for carrier rating accuracy and eBay policy compliance, while stripping EXIF GPS coordinates from all public photos and masking exact Kemptville pad coordinates behind `"Ottawa South / Hwy 416 Corridor"` strictly on Facebook Marketplace and Kijiji classified ad payloads.
+_Avoid_: Fake eBay item location, exposed yard GPS, blanket location masking
 
 **Two-Phase Export Lock**:
 The reservation protocol that blocks an eBay-listed `Part` from being sealed into an outbound `ShipmentPallet` until its online marketplace quantity is confirmed zeroed (`EXPORT_LOCK_PENDING` $\rightarrow$ `EXPORT_LOCK_CONFIRMED`, via supervisor manual verification in Phase 1 or automated eBay API sync in Phase 2A).
@@ -191,9 +199,9 @@ _Avoid_: Bi-monthly infusion, recurring investor top-up, slush fund
 A container-pad rent or software/equipment lease `Expense` incurred within an `Organization`'s independent corporate books and flagged `isDeferredIntercompanyAccrual = true` (`accrualSettledAt = null`) that accrues on its GL balance sheet without reducing liquid buying power in `AvailableWorkingCapital_CAD` until settled in cash (subject to counterparty `ITA s. 78(1)` tax verification).
 _Avoid_: Forgiven rent, off-ledger lease, free yard use, cross-entity subsidy
 
-**Ontario HST Trust Ring-Fencing (`RULE-TAX-HST-01`)**:
-The tax accounting invariant (`isOntarioEntityHstRegistered = true`, `13%` rate) requiring `taxOrVatMinor` collected on `DOMESTIC_ORIGIN` sales to be isolated in a CRA HST Payable Trust liability counter and strictly excluded from `netRealizedCadMinor`, `AvailableWorkingCapital_CAD`, and `DistributableRealizedProfitPool_CAD`.
-_Avoid_: Tax-inclusive margin, spendable HST, gross revenue profit
+**Ontario HST Trust Ring-Fencing & eBay Billing Agent Split (`RULE-TAX-HST-01`)**:
+The channel-split tax accounting invariant (`isOntarioHstRegistered = true`, `13%` rate): on `EBAY_MOTORS_SHIPPED`, eBay collects and remits 100% of buyer GST/HST directly to the CRA as Billing Agent (`buyerTaxRemittedByPlatformMinor`, adding `0` to corporate `taxOrVatMinor`) while 13% HST charged on eBay seller fees is tracked as recoverable Input Tax Credit (`itcReceivableCadMinor`); on direct and local classified channels, 13% HST (`taxOrVatMinor`) is collected directly and `netHstTrustLiability = max(0, hstCollectedDirect - verifiedItcReceivable)` is strictly ring-fenced out of `AvailableWorkingCapital_CAD` and `DistributableRealizedProfitPool_CAD`.
+_Avoid_: Double-remitting eBay buyer HST, tax-inclusive margin, spendable HST
 
 **Operator Float (`HELD_IN_OPERATOR_FLOAT`)**:
 Physical domestic cash collected within `ORG_SALVAGE_EXPORT` from local sales (`SaleTransaction.grossCollectedMinor`) and cash scrap recycler payouts (`ScrapComponentLog.payoutCadMinor`) held in the salvage field operator's custody as an auditable petty-cash subledger balance that can fund receipted/vouchered shop expenses (`paidFromCashCustody = 'HELD_IN_OPERATOR_FLOAT'`), offset partner draws (`RULE-PAY-003`), or be swept to `SETTLED_ORIGIN_CORP_BANK` via `CashCustodyTransfer`.
@@ -213,28 +221,32 @@ _Avoid_: Stripper wage, hourly yard pay, dismantling fee
 A founder compensation disbursement (`PARTNER_PROFIT_DRAW`) restricted strictly to positive `DistributableRealizedProfitPool_CAD` (`RULE-PAY-002`, protecting `initialSeedCapitalCadMinor`) and automatically netted against any outstanding `HELD_IN_OPERATOR_FLOAT` balance (`RULE-PAY-003`) before corporate bank cash is disbursed.
 _Avoid_: Owner salary, founder wage, partner payout
 
-## Brockville Cannabis Cultivation & Processing (`cannabis` Schema — `ORG_CANNABIS_NURSERY_PROC`)
+## Brockville Cannabis Cultivation & Processing (`cannabis` Schema — `ORG_CANNABIS_NURSERY_PROC`, Dormant Until Phase 2B)
 
 **Cannabis Strain**:
 A distinct genetic cultivar (`CannabisStrain`) registered within `ORG_CANNABIS_NURSERY_PROC` defining lineage, target cannabinoid percentages, and terpene profile for mother plants and downstream lots.
 _Avoid_: Variety, SKU, plant type, flavor
 
 **Cannabis Lot**:
-A traceable biological or extracted inventory unit (`LOT-YYYY-XXXX`) tracked either by discrete plant count (`trackingUnit = 'PLANTS'`: `MOTHER_PLANT`, `CLONE_TRAY`, `VEGETATIVE_BATCH`) or continuous gram weight (`trackingUnit = 'GRAMS'`: `FRESH_HARVEST`, `DRIED_FLOWER`, `TRIM_BIOMASS`, `CRUDE_EXTRACT`, `DISTILLATE_OR_ISOLATE`).
+A traceable biological, cured, or extracted inventory unit (`LOT-YYYY-XXXX`) tracked in integer tenth-grams (`0.1g` = `0.0001 kg`), discrete units/plants, and milligrams of Total THC (`totalThcMg`), including on-site cultivation provenance (`isGrownOnSite` for the *Cannabis Regulations* s. 21(3) micro-processing exemption).
 _Avoid_: Batch, plant group, harvest lot, SKU
 
-**Cannabis Lot Transformation**:
-A gram-accurate curing or extraction processing run ("moving the juice", `FR-CAN-02`) where input weight must strictly equal output weight plus moisture loss, witnessed waste destroyed, and unaccounted variance ($\text{InputWeight}_{\text{g}} = \text{OutputWeight}_{\text{g}} + \text{MoistureLoss}_{\text{g}} + \text{WasteDestroyed}_{\text{g}} + \text{UnaccountedVariance}_{\text{g}}$).
-_Avoid_: Extraction run, curing job, batch split, processing step
+**Production Run (`ProductionRun`)**:
+A multi-input, multi-output (`ProductionRunInput` / `ProductionRunOutput`) curing, solventless ice-water hash, rosin pressing, infused pre-roll, or packaging batch transformation ("moving the juice", `FR-CAN-02`) where total input tenth-grams strictly equal output yield plus process loss, destroyed byproduct, and unaccounted variance.
+_Avoid_: 1:1 lot transformation, single-output batch, processing step
+
+**Canonical Inventory Event (`CanonicalInventoryEvent`)**:
+An append-only regulatory ledger record capturing signed tenth-gram mass (`netMassTenthGrams`), flowering vs. non-flowering mass (`flowerMassTenthGrams`, `nonFlowerMassTenthGrams`), discrete units, and Total THC (`totalThcMg`) to reconcile both Health Canada CTLS kilogram reports and CRA Form B300 excise duty returns (`$1.00/g` flowering, `$0.30/g` non-flowering, and extract mg-THC duty).
+_Avoid_: Mutable lot balance, floating-point weight log
 
 **Unaccounted Variance (`RULE-CAN-001`)**:
-The residual gram difference in a `CannabisLotTransformation` after subtracting output weight, moisture loss, and witnessed waste from input weight, triggering an automatic `varianceAlertFlagged = true` and `complianceHold = true` if $|\text{UnaccountedVariance}_{\text{g}}| / \text{InputWeight}_{\text{g}} > 2.0\%$.
+The residual tenth-gram difference in a `ProductionRun` after subtracting output yield, process loss, and destroyed byproduct from total input mass, triggering an automatic QAP variance review and `complianceHold = true` if $|\text{UnaccountedVariance}| / \text{TotalInputMass} > 2.0\%$.
 _Avoid_: Shrinkage, processing loss, yield gap
 
 **Compliance Hold**:
-A regulatory lock (`complianceHold = true`) placed on a `CannabisLot` when `UnaccountedVariance` exceeds $2.0\%$ or a mandatory Lab Certificate of Analysis (`labCoaStorageKey` in `R2_PRIVATE_EVIDENCE_BUCKET`) is missing, blocking transfer or B2B release until `CANNABIS_QAP_COMPLIANCE` sign-off (`verifiedByQapUserId`).
+A regulatory lock (`complianceHold = true`) placed on a `CannabisLot` when `UnaccountedVariance` exceeds $2.0\%$, a mandatory 60-day extract NNCP (`nncpNoticeId`) or s. 88.94 Preventive Control Plan check is incomplete, or a Lab Certificate of Analysis (`labCoaStorageKey` in `R2_PRIVATE_EVIDENCE_BUCKET`) is missing, blocking transfer or release until `CANNABIS_QAP_COMPLIANCE` sign-off.
 _Avoid_: Quarantine, QA lock, blocked lot
 
-**Dual-Witness Destruction Log**:
-An immutable Health Canada compliance record (`CannabisDestructionLog`, `FR-CAN-03`) of destroyed cannabis waste or culled plants signed by two distinct authenticated personnel (`primaryUserId != witnessUserId`, with at least one holding `CANNABIS_QAP_COMPLIANCE` or `ARCHITECT_CFO`) and backed by a timestamped photo (`evidencePhotoStorageKey`) in `R2_PRIVATE_EVIDENCE_BUCKET`.
-_Avoid_: Waste log, cull ticket, disposal record
+**Three-Stream Cannabis Destruction (`CannabisDestructionLog` — `SOR/2025-45`)**:
+The post-2025 federal cannabis destruction classification (`FR-CAN-03`, ss. 43 & 229) distinguishing `CULTIVATION_WASTE` (leaves, shoots, branches: `0` witnesses, `0` s. 229 records, `0` CTLS reporting), `WHOLE_PLANTS` (`1` employee witness with no security clearance + `plantCount` only, no mandatory weight), and `OTHER_CANNABIS` (buds, hash, rosin, spent pucks, packaged units: `1` employee witness + pre-destruction net weight, with an optional 2nd witness toggle for excise-stamped goods).
+_Avoid_: Blanket dual-witness rule, security-cleared witness requirement, cultivation waste weighing
