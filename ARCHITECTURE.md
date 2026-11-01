@@ -4,9 +4,9 @@
 
 This platform is a **Unified Multi-Tenant Domain-Driven Design (DDD) Modular Monolith** adhering to **Hexagonal Architecture (Ports & Adapters)**. It runs **two distinct businesses** owned and operated by the partners on **80% shared physical warehouse infrastructure** (`8.5" × 11"` 10-MIL synthetic laser QR hang-tag sheet & optional ZPL II printing, mobile camera barcode scanning, hierarchical location bins, receipt-gated expenses, cash custody tracking, and private Cloudflare R2 evidence storage), while maintaining strict PostgreSQL schema and Row-Level Security (RLS) isolation:
 
-1. **Engine 1 (`ORG_SALVAGE_EXPORT` — `salvage` DB schema):** Canada-First Ontario Auto/Marine Dismantling, eBay Motors & Local Classifieds Syndication, Ramsayville Vehicle Flips, and Pre-Paid Export across four operational nodes:
-   * **Node 1 (Kemptville Yard — `ZONE_CONTAINER_PAD`):** Offline-first vehicle/watercraft dismantling, QR tagging, and 40ft container bin storage (`C01`–`C04`), centralizing 100% of stripped parts inventory in Ontario.
-   * **Node 2 (Ramsayville Shop & Domestic Fulfillment Hub):** Vehicle repair, Salvage-to-Rebuilt dossier tracking, 8-slot retail vehicle lot (`RETAIL_LOT_VEHICLE_SALE`), eBay Motors courier dispatch (`EBAY_MOTORS_SHIPPED`), and bylaw-stealth local Ottawa classifieds pickup (`"Ramsayville / East Ottawa, ON"` — `RULE-MKT-002`).
+1. **Engine 1 (`ORG_SALVAGE_EXPORT` — `salvage` DB schema):** Canada-First Ontario Auto/Marine Dismantling, eBay Motors & B2B/Classifieds Syndication, Ramsayville Vehicle Flips, and Pre-Paid Export across four operational nodes:
+   * **Node 1 (Kemptville Dry Container Warehouse — `KEMP` / `ZONE_CONTAINER_PAD`):** Under Ontario `O. Reg. 85/16` (`RULE-ENV-001` Zero-Fluid Farm Rule), Kemptville operates strictly as a dry, clean-parts 40ft container warehouse (`C01`–`C04`, `allowsWholeVehicleDismantling = false`, `0` uncrushed shells on gravel), storing 100% of QR-tagged stripped inventory in Ontario while protecting farm land title.
+   * **Node 2 (Ramsayville Concrete Teardown Shop & Domestic Fulfillment Hub — `RAMS`):** Sealed-concrete vehicle fluid drainage, dismantling, 5-stream commodity scrap separation (`ScrapComponentLog`), HTA Section 60 statutory Garage & Wrecking Register intake, DriveON 10-day re-inspection / 36-day SSC prep, 8-slot retail beater lot (`RETAIL_LOT_VEHICLE_SALE`, with `HIGH_END_REBUILD` paused in Year 1), Ottawa/Gatineau B2B mechanic powertrain broadcasts, eBay Motors courier dispatch (`EBAY_MOTORS_SHIPPED`), and bylaw-stealth local Ottawa pickup (`"Ramsayville / East Ottawa, ON"` — `RULE-MKT-002`).
    * **Node 3 (Pre-Paid Direct Export Consolidation):** LCL pallet / FCL container manifesting and broker-ready customs dossier output, governed by the **100% Pre-Paid Origin Export Gate (`RULE-EXP-001`)** prohibiting overseas consignment shipments when no destination vault is active.
    * **Node 4 (Destination Bonded Vault — Schema-Ready / Dormant in Phase 1–2):** Landed check-in, B2B reservation holds, MFA `aal2` Cash-on-Delivery (COD) checkout, blind cycle counts, and FX batch settlement (retained in schema behind `exportPolicy.exportFulfillmentMode` for future overseas vault activation and Vertical-SaaS portability).
 2. **Engine 2 (`ORG_CANNABIS_NURSERY_PROC` — `cannabis` DB schema):** Brockville JV & Kemptville Health Canada Cannabis Nursery (mother plants, clones, and genetics) and Processing ("moving the juice" — wet-to-dry curing, biomass extraction, and bulk lot transformation):
@@ -204,6 +204,7 @@ model Organization {
   cannabisStrains           CannabisStrain[]
   cannabisLots              CannabisLot[]
   cannabisDestructionLogs   CannabisDestructionLog[]
+  scrapComponentLogs        ScrapComponentLog[]
 
   @@schema("shared")
 }
@@ -226,6 +227,7 @@ model User {
   strippedParts           Part[]                      @relation("StrippedByUser")
   custodyEvents           CustodyEvent[]
   loggedExpenses          Expense[]                   @relation("LoggedByUser")
+  recordedScrapLogs       ScrapComponentLog[]         @relation("ScrapRecordedByUser")
   salesExecuted           SaleTransaction[]           @relation("SoldByUser")
   brokeredSales           SaleTransaction[]           @relation("BrokerUser")
   verifiedSales           SaleTransaction[]           @relation("VerifiedByAdmin")
@@ -258,20 +260,21 @@ model OrganizationMembership {
 }
 
 model StorageLocation {
-  id                     String           @id @default(uuid()) @db.Uuid
-  organizationId         String           @db.Uuid
-  organization           Organization     @relation(fields: [organizationId], references: [id])
-  allowedOrgType         OrganizationType // Enforces RULE-ZONE-001 at data layer (SALVAGE_AND_EXPORT vs CANNABIS_NURSERY_AND_PROCESSING)
-  maxActiveAssetCapacity Int?             // Configurable active vehicle/shell limit per zone (e.g., 4 for Kemptville Pad, 8 for Ramsayville Lot, null for shelf bins)
-  siteCode               String           // "KEMP", "RAMS", "POSV", "BROCK"
-  zoneCode               String           @default("ZONE_CONTAINER_PAD") // "ZONE_CONTAINER_PAD", "ZONE_GREENHOUSE_AG", "ZONE_TREE_FARM", "ZONE_RAMSAYVILLE_SHOP", "ZONE_TRINIDAD_VAULT", "ZONE_BROCKVILLE_FACILITY"
-  containerCode          String           // "C01".."C04", "V01", "PROP", "EXTR"
-  rackCode               String           // "R01".."R10"
-  shelfCode              String           // "S01".."S05" or "T01".."T10"
-  binCode                String           // "B01".."B20"
-  fullQrBarcode          String           @unique // e.g., "KEMP-C01-R02-S03-B04" or "BROCK-PROP-R1-T2"
-  maxWeightKg            Decimal          @default(150.0) @db.Decimal(6, 2)
-  createdAt              DateTime         @default(now())
+  id                            String           @id @default(uuid()) @db.Uuid
+  organizationId                String           @db.Uuid
+  organization                  Organization     @relation(fields: [organizationId], references: [id])
+  allowedOrgType                OrganizationType // Enforces RULE-ZONE-001 at data layer (SALVAGE_AND_EXPORT vs CANNABIS_NURSERY_AND_PROCESSING)
+  allowsWholeVehicleDismantling Boolean          @default(false) // Enforces O. Reg. 85/16 RULE-ENV-001 (true on RAMS concrete bays; false on KEMP dry container pad)
+  maxActiveAssetCapacity        Int?             // Configurable active vehicle limit per zone (0 on Kemptville Dry Pad, 8 on Ramsayville Shop/Lot, null for shelf bins)
+  siteCode                      String           // "KEMP", "RAMS", "POSV", "BROCK"
+  zoneCode                      String           @default("ZONE_CONTAINER_PAD") // "ZONE_CONTAINER_PAD", "ZONE_GREENHOUSE_AG", "ZONE_TREE_FARM", "ZONE_RAMSAYVILLE_SHOP", "ZONE_TRINIDAD_VAULT", "ZONE_BROCKVILLE_FACILITY"
+  containerCode                 String           // "C01".."C04", "V01", "PROP", "EXTR"
+  rackCode                      String           // "R01".."R10"
+  shelfCode                     String           // "S01".."S05" or "T01".."T10"
+  binCode                       String           // "B01".."B20"
+  fullQrBarcode                 String           @unique // e.g., "KEMP-C01-R02-S03-B04" or "BROCK-PROP-R1-T2"
+  maxWeightKg                   Decimal          @default(150.0) @db.Decimal(6, 2)
+  createdAt                     DateTime         @default(now())
 
   parts          Part[]
   vehicles       Vehicle[]
@@ -300,6 +303,7 @@ model CustodyEvent {
   toLocationBarcode   String       // Bin QR, Pallet QR, Vault Shelf QR, or Grow Table QR
   expectedVersion     Int
   hasConflict         Boolean      @default(false) // Flagged true if offline scan version mismatches server
+  complianceWarnings  String[]     @default([])    // Non-blocking WARN_ONLY flags emitted on scan (e.g., COMPLIANCE_WARNING_UNDRAINED_FARM)
   deviceTimestamp     DateTime
   serverReceivedAt    DateTime     @default(now())
 
@@ -323,15 +327,17 @@ model Expense {
   loggedByUserId        String               @db.Uuid
   loggedByUser          User                 @relation("LoggedByUser", fields: [loggedByUserId], references: [id])
 
-  category              ExpenseCategory
-  vendorName            String
-  description           String
-  amountOriginalMinor   Int
-  currencyOriginal      CurrencyCode         @default(CAD)
-  amountCadMinor        Int
-  paidFromCashCustody   CashCustodyState?    // Allows deducting shop expenses directly from HELD_IN_OPERATOR_FLOAT
-  isReversalEntry       Boolean              @default(false)
-  reversesExpenseId     String?              @db.Uuid
+  category                      ExpenseCategory
+  vendorName                    String
+  description                   String
+  amountOriginalMinor           Int
+  currencyOriginal              CurrencyCode         @default(CAD)
+  amountCadMinor                Int
+  paidFromCashCustody           CashCustodyState?    // Allows deducting shop expenses directly from HELD_IN_OPERATOR_FLOAT
+  isDeferredIntercompanyAccrual Boolean              @default(false) // ITA s. 78(1) accrued inter-company rent/lease; excluded from liquid cash outlay until accrualSettledAt != null
+  accrualSettledAt              DateTime?            // Populated when deferred inter-company accrual is actually paid in cash
+  isReversalEntry               Boolean              @default(false)
+  reversesExpenseId             String?              @db.Uuid
 
   // Tiered Receipt & Voucher Evidence (Stored in R2_PRIVATE_EVIDENCE_BUCKET when VERIFIED_RECEIPT)
   receiptVerificationState ReceiptVerificationState @default(VERIFIED_RECEIPT)
@@ -559,73 +565,126 @@ enum ExportSaleChannel {
   @@schema("salvage")
 }
 
+// HTA Section 60 Statutory Garage & Wrecking Register Enums
+enum VehicleAcquisitionSource {
+  LICENSED_AUCTION       // Copart / IAAI / OMVIC wholesale auction
+  PRIVATE_DRIVEWAY_BUY   // Direct rural/local owner acquisition (~$800-$1,035 driveway buy)
+  DEALER_WHOLESALE
+  TRADE_IN
+
+  @@schema("salvage")
+}
+
+enum StatutoryVehiclePurpose {
+  WRECKING_PARTS_ONLY
+  RETAIL_RESALE
+  EXPORT_WHOLE
+
+  @@schema("salvage")
+}
+
+// 5-Stream Commodity Scrap Recovery Protocol & Cat Shrinkage Tracking
+enum ScrapStreamCategory {
+  CATALYTIC_CONVERTER
+  ALUMINUM_ALLOY_WHEELS
+  COPPER_WIRING_HARNESS
+  ROTORS_AND_BATTERY
+  BARE_STEEL_SHELL
+
+  @@schema("salvage")
+}
+
+enum CatalyticConverterDisposition {
+  PRESENT_AT_INTAKE
+  MISSING_AT_INTAKE
+  LOGGED_SCRAP_SALE
+  SHELVED_AS_PART
+
+  @@schema("salvage")
+}
+
 model Vehicle {
-  id                          String                     @id @default(uuid()) @db.Uuid
-  internalStockNumber         String                     @unique // e.g., "AST-2026-0001"
-  assetCategory               AssetCategory              @default(AUTOMOBILE)
-  vinOrHin                    String                     @unique // 17-char VIN, 12-char HIN, or Serial#
+  id                          String                        @id @default(uuid()) @db.Uuid
+  internalStockNumber         String                        @unique // e.g., "AST-2026-0001"
+  assetCategory               AssetCategory                 @default(AUTOMOBILE)
+  vinOrHin                    String                        @unique // 17-char VIN, 12-char HIN, or Serial#
   year                        Int
   make                        String
   model                       String
   trim                        String?
   engineSpec                  String?
-  odometerKm                  Int?                       // Road odometer in km
-  engineHours                 Int?                       // Watercraft / equipment operating hours
+  odometerKm                  Int?                          // Road odometer in km
+  engineHours                 Int?                          // Watercraft / equipment operating hours
   exteriorColor               String?
-  steeringSide                SteeringSideCompatibility  @default(LHD_ONLY)
-  oemFitmentVerified          Boolean                    @default(false)
-  roadBrand                   RoadVehicleBrand           @default(NONE)
+  steeringSide                SteeringSideCompatibility     @default(LHD_ONLY)
+  oemFitmentVerified          Boolean                       @default(false)
+  roadBrand                   RoadVehicleBrand              @default(NONE)
   operationalLane             OperationalLane
-  lifecycleState              AssetLifecycleState        @default(PROPOSED_DEAL)
-  availabilityState           InventoryAvailabilityState @default(AVAILABLE)
-  classifiedsSyncState        ClassifiedsSyncState       @default(NOT_POSTED)
-  storageLocationId           String?                    @db.Uuid
-  storageLocation             StorageLocation?           @relation(fields: [storageLocationId], references: [id])
+  lifecycleState              AssetLifecycleState           @default(PROPOSED_DEAL)
+  availabilityState           InventoryAvailabilityState    @default(AVAILABLE)
+  classifiedsSyncState        ClassifiedsSyncState          @default(NOT_POSTED)
+  storageLocationId           String?                       @db.Uuid
+  storageLocation             StorageLocation?              @relation(fields: [storageLocationId], references: [id])
+
+  // Ontario HTA Section 60 Statutory Garage & Wrecking Register
+  acquisitionSource           VehicleAcquisitionSource      @default(LICENSED_AUCTION)
+  sellerFullName              String?
+  sellerAddress               String?
+  sellerPhotoIdStorageKey     String?                       // Private R2 key (R2_PRIVATE_EVIDENCE_BUCKET)
+  ontarioPermitNumber         String?                       // Green-slip vehicle permit #
+  declaredStatutoryPurpose    StatutoryVehiclePurpose       @default(WRECKING_PARTS_ONLY)
 
   // Export Physical Specs & Tariff Classification (For Whole-Unit Exports: Watercraft, Equipment, Cars)
-  weightKg                    Decimal?                   @db.Decimal(8, 2)
-  dimensionsCm                Json?                      // { "l": 320, "w": 125, "h": 110 }
-  suggestedHsCode             String                     @default("8903.99")
+  weightKg                    Decimal?                      @db.Decimal(8, 2)
+  dimensionsCm                Json?                         // { "l": 320, "w": 125, "h": 110 }
+  suggestedHsCode             String                        @default("8903.99")
   brokerVerifiedHsCode        String?
 
-  // Capital Gate & CFO Deal Analyzer Baseline (CAD Cents)
+  // Capital Gate, Deal Discipline Caps & 1-Tap CFO Override Baseline (CAD Cents)
   estimatedMaxBidCadMinor     Int
-  actualPurchasePriceCadMinor Int                        @default(0)
-  estimatedRepairCadMinor     Int                        @default(0)
-  targetGrossRealizationMinor Int                        @default(0)
-  cfoGateApprovedById         String?                    @db.Uuid
+  actualPurchasePriceCadMinor Int                           @default(0)
+  estimatedRepairCadMinor     Int                           @default(0)
+  targetGrossRealizationMinor Int                           @default(0)
+  cfoGateApprovedById         String?                       @db.Uuid
   cfoGateApprovedAt           DateTime?
+  cfoGateOverrideReason       String?                       // 1-Tap cfoOverride reason note for reserve floor, $3,200 donor cap, or lane pause
 
   // Whole-Unit Export Valuation & Trinidad Vault Pricing (Minor Units / Cents)
   wholesaleFobUsdMinor        Int?
   landedCostTtdMinor          Int?
   vaultFloorPriceTtdMinor     Int?
-  brokerMarketPriceTtdMinor   Int?                       // Expected local TT selling price quoted by broker
+  brokerMarketPriceTtdMinor   Int?                          // Expected local TT selling price quoted by broker
 
-  // Compliance & Inspection Dossier (Keys pointing to R2_PRIVATE_EVIDENCE_BUCKET)
-  rebuildDossierJson          Json?                      // Flexible schema for Reg. 601 photos, frame bench, estimate
-  driveOnSicNumber            String?
-  driveOnSicPassedAt          DateTime?
-  driveOnSscNumber            String?
-  driveOnSscIssuedAt          DateTime?
-  driveOnSscExpiresAt         DateTime?                  // driveOnSscIssuedAt + 36 calendar days (AUTOMOBILE only)
-  uvipStorageKey              String?
+  // Compliance & DriveON 10-Day Re-Inspection / 36-Day SSC Dossier (R2_PRIVATE_EVIDENCE_BUCKET)
+  rebuildDossierJson            Json?                       // Flexible schema for Reg. 601 photos, frame bench, estimate
+  driveOnInitialFailAt          DateTime?                   // Initial DriveON tablet inspection fail timestamp
+  driveOnReinspectionDeadlineAt DateTime?                   // driveOnInitialFailAt + 10 calendar days (discounted punch-list re-test window)
+  driveOnFailSheetStorageKey    String?                     // Private R2 key for DriveON initial fail punch-list
+  driveOnSicNumber              String?
+  driveOnSicPassedAt            DateTime?
+  driveOnSscNumber              String?
+  driveOnSscIssuedAt            DateTime?                   // Triggered upon buyer deposit to maximize 36-day window
+  driveOnSscExpiresAt           DateTime?                   // driveOnSscIssuedAt + 36 calendar days (AUTOMOBILE only)
+  uvipStorageKey                String?
 
-  // Environmental & Yard Clearance Evidence (R2_PRIVATE_EVIDENCE_BUCKET keys)
-  refrigerantEvacCertKey      String?                    // Certified technician recovery record
-  fluidsDrainedAt             DateTime?
-  steamCleanedReceiptKey      String?
-  scrapMetalTicketKey         String?                    // Weigh-scale ticket required for SCRAPPED_METAL_CLEARED
-  scrapRecoveryCadMinor       Int                        @default(0) // CAD Cents received on scrapMetalTicketKey weigh receipt
-  scrappedClearedAt           DateTime?
+  // Environmental, 5-Stream Scrap & Async WARN_ONLY Compliance Flags (R2_PRIVATE_EVIDENCE_BUCKET)
+  refrigerantEvacCertKey        String?                     // Certified technician recovery record
+  fluidsDrainedAt               DateTime?                   // Performed on sealed concrete at RAMS per O. Reg. 85/16
+  steamCleanedReceiptKey        String?
+  catalyticConverterDisposition CatalyticConverterDisposition @default(PRESENT_AT_INTAKE)
+  scrapMetalTicketKey           String?                     // Final bare-shell weigh-scale ticket
+  scrapRecoveryCadMinor         Int                         @default(0) // Rolled-up CAD cents from ScrapComponentLog streams (+ legacy hull ticket)
+  scrappedClearedAt             DateTime?
+  complianceWarnings            String[]                    @default([]) // Async review flags in WARN_ONLY mode (COMPLIANCE_WARNING_UNDRAINED_FARM, MISSING_HTA_S60_DOCS, UNRECONCILED_CATALYTIC_CONVERTER, DRIVEON_SAFETY_CERT_WARNING)
 
   realizedRetailSaleCadMinor  Int?
   soldAt                      DateTime?
-  version                     Int                        @default(1)
-  createdAt                   DateTime                   @default(now())
-  updatedAt                   DateTime                   @updatedAt
+  version                     Int                           @default(1)
+  createdAt                   DateTime                      @default(now())
+  updatedAt                   DateTime                      @updatedAt
 
   parts                       Part[]
+  scrapComponentLogs          ScrapComponentLog[]
   expenses                    Expense[]
   custodyHistory              CustodyEvent[]
   b2bReservations             B2BReservation[]
@@ -700,6 +759,7 @@ model Part {
   ebayTitle                  String?                    @db.VarChar(80)
   ebayAspectsJson            Json?
   ebayCompatibilityJson      Json?
+  complianceWarnings         String[]                   @default([]) // Non-blocking WARN_ONLY flags (e.g., COMPLIANCE_WARNING_UNDRAINED_FARM)
   version                    Int                        @default(1) // Authoritative concurrency counter
 
   strippedAt                 DateTime                   @default(now())
@@ -717,6 +777,28 @@ model Part {
   @@index([donorVehicleId])
   @@index([storageLocationId])
   @@index([steeringSideCompatibility])
+  @@schema("salvage")
+}
+
+// 5-Stream Commodity Scrap Recovery Log (Cats, Alloy Wheels, Copper Looms, Rotors/Batteries, Bare Shell)
+model ScrapComponentLog {
+  id                       String              @id @default(uuid()) @db.Uuid
+  organizationId           String              @db.Uuid
+  organization             Organization        @relation(fields: [organizationId], references: [id])
+  vehicleId                String              @db.Uuid
+  vehicle                  Vehicle             @relation(fields: [vehicleId], references: [id])
+  scrapStream              ScrapStreamCategory
+  weightKg                 Decimal?            @db.Decimal(8, 2)
+  payoutCadMinor           Int                 // Gross CAD cents received from metal/cat recycler
+  recyclerName             String
+  recyclerTicketStorageKey String              // Weigh-scale or cat payout receipt in R2_PRIVATE_EVIDENCE_BUCKET
+  cashCustodyState         CashCustodyState    @default(SETTLED_ORIGIN_CORP_BANK) // Or HELD_IN_OPERATOR_FLOAT when paid in cash
+  recordedByUserId         String              @db.Uuid
+  recordedByUser           User                @relation("ScrapRecordedByUser", fields: [recordedByUserId], references: [id])
+  createdAt                DateTime            @default(now())
+
+  @@index([organizationId, createdAt])
+  @@index([vehicleId, scrapStream])
   @@schema("salvage")
 }
 
@@ -849,11 +931,13 @@ model SaleTransaction {
   cfoOverrideReasonNote               String?
   platformFeeMinor                    Int                  @default(0) // $0 for FB/Walk-In; ~13.25% for EBAY_MOTORS_SHIPPED
   shippingCostMinor                   Int                  @default(0) // $0 for Local Pickup; Courier label cost for eBay
-  taxOrVatMinor                       Int                  @default(0)
+  taxOrVatMinor                       Int                  @default(0) // 13% Ontario HST (or 12.5% TT VAT) ring-fenced out of netRealizedCadMinor
+  taxInvoiceNumber                    String?              // HST / VAT invoice number when entity is tax-registered
   grossCollectedMinor                 Int
-  netRealizedCadMinor                 Int                  // (gross - platformFee - shipping) in CAD for VIN Break-Even & Self-Funding Pool math
+  netRealizedCadMinor                 Int                  // (subtotalMinor - platformFee - shipping) in CAD; strictly excludes 13% HST trust funds
   paymentMethod                       String               // "CASH", "INTERAC_ETRANSFER", "VERIFIED_BANK_WIRE", "EBAY_MANAGED_PAYOUT"
   cashCustodyState                    CashCustodyState
+  complianceWarnings                  String[]             @default([]) // Non-blocking WARN_ONLY flags (e.g., DRIVEON_SAFETY_CERT_WARNING)
 
   // Private Evidence (Stored in R2_PRIVATE_EVIDENCE_BUCKET)
   paymentProofStorageKey              String               // Photo of cash, e-Transfer screenshot, or wire slip (Mandatory)
@@ -1123,6 +1207,7 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER lock_audit_log BEFORE UPDATE OR DELETE ON "shared"."AuditLog" FOR EACH ROW EXECUTE FUNCTION prevent_audit_tampering();
 CREATE TRIGGER lock_expense_delete BEFORE DELETE ON "shared"."Expense" FOR EACH ROW EXECUTE FUNCTION prevent_audit_tampering();
 CREATE TRIGGER lock_sale_tx_delete BEFORE DELETE ON "salvage"."SaleTransaction" FOR EACH ROW EXECUTE FUNCTION prevent_audit_tampering();
+CREATE TRIGGER lock_scrap_log_delete BEFORE UPDATE OR DELETE ON "salvage"."ScrapComponentLog" FOR EACH ROW EXECUTE FUNCTION prevent_audit_tampering();
 CREATE TRIGGER lock_cash_transfer_delete BEFORE DELETE ON "shared"."CashCustodyTransfer" FOR EACH ROW EXECUTE FUNCTION prevent_audit_tampering();
 CREATE TRIGGER lock_cannabis_destruction_log BEFORE UPDATE OR DELETE ON "cannabis"."CannabisDestructionLog" FOR EACH ROW EXECUTE FUNCTION prevent_audit_tampering();
 CREATE TRIGGER lock_cannabis_transformation_delete BEFORE DELETE ON "cannabis"."CannabisLotTransformation" FOR EACH ROW EXECUTE FUNCTION prevent_audit_tampering();
@@ -1221,6 +1306,7 @@ ALTER TABLE "shared"."AuditLog" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "cannabis"."CannabisStrain" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "cannabis"."CannabisLot" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "cannabis"."CannabisDestructionLog" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "salvage"."ScrapComponentLog" ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY tenant_isolation_storage_location ON "shared"."StorageLocation"
   USING ("organizationId" = (auth.jwt() ->> 'organization_id')::uuid);
@@ -1237,6 +1323,8 @@ CREATE POLICY tenant_isolation_cannabis_strain ON "cannabis"."CannabisStrain"
 CREATE POLICY tenant_isolation_cannabis_lot ON "cannabis"."CannabisLot"
   USING ("organizationId" = (auth.jwt() ->> 'organization_id')::uuid);
 CREATE POLICY tenant_isolation_cannabis_destruction ON "cannabis"."CannabisDestructionLog"
+  USING ("organizationId" = (auth.jwt() ->> 'organization_id')::uuid);
+CREATE POLICY tenant_isolation_scrap_component_log ON "salvage"."ScrapComponentLog"
   USING ("organizationId" = (auth.jwt() ->> 'organization_id')::uuid);
 ```
 
@@ -1273,22 +1361,29 @@ An external HTTP request to eBay cannot run inside a PostgreSQL transaction. To 
 * **Physical Seal Gate Rule:** `ShipmentPallet.sealedAt` CANNOT be populated if any child `Part` on that pallet has `ebaySyncState == 'EXPORT_LOCK_PENDING'` or `custodyState == 'STRIPPED_RAW_OFFLINE'`. All parts must reach `EXPORT_LOCK_CONFIRMED` (or `NOT_LISTED` / `DELISTED`) before a pallet can be sealed.
 * **Online vs. Offline Initial `PartCustodyState` Assignment:** During 3-tap part intake (`FR-INT-02`), if the worker scans both the part QR (`PRT-XXXXXX`) and a valid destination storage bin QR (`toLocationBarcode`, e.g., `KEMP-C01-R01-S01-B01`) while online (or upon server sync of the intake + bin scan), `Part.custodyState` transitions immediately to `SHELVED_ORIGIN_CONTAINER` (and `storageLocationId` is populated). `STRIPPED_RAW_OFFLINE` is strictly a transient state for parts captured without a destination bin scan or queued locally in IndexedDB awaiting server reconciliation.
 
-### 5.2 Offline Custody Chain, Data-Driven Site Zoning Guard & Conflict Resolution
+### 5.2 Offline Custody Chain, Multi-Tenant Zoning, `O. Reg. 85/16` Zero-Fluid Farm Rule & `WARN_ONLY` Physical Custody Agility
 
 1. **No Silent Overwrites:** When an offline yard or nursery worker scans a part, whole asset, or cannabis lot into a storage bin, grow table, or pallet, the PWA appends a `CustodyEvent` containing `expectedVersion`, `organizationId`, and a client UUIDv7 `idempotencyKey`.
-2. **Data-Driven Site Zoning & Capacity Enforcement (`RULE-ZONE-001`):** Every location scan verifies that `StorageLocation.organizationId` and `StorageLocation.allowedOrgType` match the scanned item's organization (`SALVAGE_AND_EXPORT` vs. `CANNABIS_NURSERY_AND_PROCESSING`) and enforces `StorageLocation.maxActiveAssetCapacity` (seeded to `4` for the Kemptville Dismantling Pad, `8` for the Ramsayville Retail Lot, and `null` for standard shelf bins). Cross-tenant or cross-zone scans are rejected with HTTP `422 Unprocessable Entity` (`SITE_ZONING_VIOLATION`).
+2. **Hard Multi-Tenant Firewall (`RULE-ZONE-001`) vs. `WARN_ONLY` Environmental/Compliance Agility (`RULE-ENV-001` / `ADR-0003`):**
+   * **Cross-Tenant `allowedOrgType` Firewall (Always Hard-Blocked):** Every location scan verifies `StorageLocation.organizationId` and `StorageLocation.allowedOrgType` (`SALVAGE_AND_EXPORT` vs. `CANNABIS_NURSERY_AND_PROCESSING`). Cross-tenant or cross-zone scans are always rejected with HTTP `422 Unprocessable Entity` (`SITE_ZONING_VIOLATION`).
+   * **Capacity Gate (`maxActiveAssetCapacity`, 1-Tap `cfoOverride`):** Enforces `StorageLocation.maxActiveAssetCapacity` (seeded to `8` on `RAMS` Ramsayville Shop/Lot and `null` on container shelf bins) according to `locationCapacityGate.enforcementMode`, accepting an audited **1-Tap `cfoOverride`** when `ARCHITECT_CFO` approves temporary overflow.
+   * **Zero-Fluid Farm Check (`RULE-ENV-001` / `O. Reg. 85/16` via `allowsWholeVehicleDismantling` + `complianceEnforcementMode`):** Kemptville (`KEMP / ZONE_CONTAINER_PAD`) is configured with `allowsWholeVehicleDismantling = false` (`true` on Ramsayville sealed concrete `RAMS`). Scanning a whole `AUTOMOBILE` or an undrained powertrain `Part` (`Vehicle.fluidsDrainedAt == null`) into a location with `allowsWholeVehicleDismantling == false` branches on `operationalGates.complianceEnforcementMode`:
+     * **`"WARN_ONLY"` (Phase 1A Default — Physical Custody Truth Preserved):** Allows the scan/state transition to succeed so PostgreSQL always reflects where the physical item actually sits, and appends `'COMPLIANCE_WARNING_UNDRAINED_FARM'` to `complianceWarnings` (and `AuditLog`) for async CFO/shop review.
+     * **`"STRICT_BLOCK"`:** Rejects the scan with HTTP `422 ENVIRONMENTAL_ZONING_VIOLATION`.
+   * The exact same `complianceEnforcementMode` (`"WARN_ONLY"` default vs. `"STRICT_BLOCK"`) governs **HTA s. 60 Seller Docs (`MISSING_HTA_S60_DOCS`)** on `FR-INT-01`, **Catalytic Converter Reconciliation (`UNRECONCILED_CATALYTIC_CONVERTER`)** on hulk clearance, and **DriveON Safety Timer Warnings (`DRIVEON_SAFETY_CERT_WARNING`)** on domestic vehicle checkout.
 3. **Server Reconciliation:** Upon sync, if `version == expectedVersion`, the server updates `storageLocationId` and increments `version`. If the version has diverged (e.g., another worker moved the item or it sold online while the device was offline), the server still records the `CustodyEvent` with `hasConflict = true` and surfaces a supervisor exception rather than silently dropping or overwriting the location.
 
-### 5.3 Adaptive Checkout, Cash Custody, Blind Cycle Counts & Destination Gate Release Protocol
+### 5.3 Adaptive Checkout, 13% Ontario HST Ring-Fencing, Cash Custody & Destination Gate Release Protocol
 
 The unified mobile checkout workflow (`/checkout`) adapts dynamically based on the scanned item's custody location (`marketNode`):
 
 1. **Domestic Origin Mode (`marketNode == 'DOMESTIC_ORIGIN'` — Primary Phase 1A Active Node):**
    * **Context & Channel Attribution:** Triggered when `HUNTER_MECHANIC` or `ARCHITECT_CFO` scans a `PRT-XXXXXX` part or `AST-XXXXXX` whole vehicle located in Ontario (`KEMP` or `RAMS`). The UI defaults to `CAD` and presents `DomesticSaleChannel` selector pills (`LOCAL_WALK_IN_CASH`, `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL`, `RETAIL_LOT_VEHICLE_SALE`, `WHOLESALE_MECHANIC_NETWORK`, `EBAY_MOTORS_SHIPPED`, `CAR_PART_WHOLESALE`).
-   * **Ontario 3-Tier Price Floor & 10% Negotiation Corridor:** Evaluates `grossCollectedMinor` against `retailPriceCadMinor` (`floorPriceAtCheckoutMinor`): discounts up to `domesticAdminDiscountToleranceBps = 1000` ($10\%$) are permitted for `HUNTER_MECHANIC` with a mandatory `discountReasonCode`; discounts $> 10\%$ require `ARCHITECT_CFO` or a CFO override (`FLOOR_PRICE_OVERRIDE_REQUIRED`).
+   * **Ontario 3-Tier Price Floor & 10% Negotiation Corridor (1-Tap `cfoOverride`):** Evaluates pre-tax `subtotalMinor` against `retailPriceCadMinor` (`floorPriceAtCheckoutMinor`): discounts up to `domesticAdminDiscountToleranceBps = 1000` ($10\%$) are permitted for `HUNTER_MECHANIC` with a mandatory `discountReasonCode`; discounts $> 10\%$ require `ARCHITECT_CFO` or a 1-tap `cfoOverride` (`FLOOR_PRICE_OVERRIDE_REQUIRED`).
+   * **Ontario 13% HST Trust Ring-Fencing (`domesticTaxPolicy.isOntarioEntityHstRegistered`):** When `true` (OMVIC/HST-registered Salvage OpCo default), computes `taxOrVatMinor = round(subtotalMinor * 0.13)` (`grossCollectedMinor = subtotalMinor + taxOrVatMinor`) and **strictly excludes `taxOrVatMinor` from `netRealizedCadMinor`** (`netRealizedCadMinor = subtotalMinor - platformFeeMinor - shippingCostMinor`) so CRA HST trust funds never inflate VIN Break-Even, `AvailableWorkingCapital_CAD`, or `DistributableRealizedProfitPool_CAD` partner draws.
    * **Immediate eBay & Local Classifieds Delist Sync:** Atomically transitions sold parts to `custodyState = 'SOLD_AND_RELEASED'` and `availabilityState = 'PAID_SETTLED'`. If `ebaySyncState == 'SYNDICATED_LIVE'`, transitions `ebaySyncState` to `'DELIST_PENDING'` and writes an `OutboxEvent` (`PartSoldLocallyDelistEbayRequested`) to immediately zero out the eBay Motors offer (via Urgent Delist Banner in Phase 1A and automated BullMQ eBay API worker in Phase 2A). If `classifiedsSyncState == 'POSTED_LIVE'`, transitions `classifiedsSyncState` to `'DELIST_REQUIRED'` so local FB/Kijiji ads are removed without delay.
    * **Operator Float & Cash Custody Tracking:** Cash collected in person sets `cashCustodyState = 'HELD_IN_OPERATOR_FLOAT'`, creating an auditable shop petty-cash float that can be drawn down when logging shop `Expense` receipts (`paidFromCashCustody = 'HELD_IN_OPERATOR_FLOAT'`) or offset against partner profit draws (`RULE-PAY-003`). Interac e-Transfers, wires, and eBay Managed Payouts default to `SETTLED_ORIGIN_CORP_BANK`.
-   * **Whole-Vehicle Lot Release & Self-Funding Working Capital Credit:** Whole-vehicle retail sales (`RETAIL_LOT_VEHICLE_SALE`) enforce uploading a signed Bill of Sale (`billOfSaleStorageKey`), transition the `Vehicle` to `lifecycleState = 'SOLD_RETAIL_ONTARIO'` and `availabilityState = 'PAID_SETTLED'` (freeing 1 of the 8 Ramsayville shop lot slots, and flagging `classifiedsSyncState = 'DELIST_REQUIRED'` if posted), and credit `netRealizedCadMinor` (`grossCollectedMinor - platformFeeMinor - shippingCostMinor`) toward the donor VIN's Break-Even Velocity counter and the **Self-Funding Working Capital Pool** (`AvailableWorkingCapital_CAD`). Because there is no separate warehouse security gate in Ontario, `isPaymentVerified` is set to `true` and `gateReleasedAt = now()` upon receipt upload.
+   * **Whole-Vehicle Lot Release, DriveON Warning Agility & Working Capital Credit:** Whole-vehicle retail sales (`RETAIL_LOT_VEHICLE_SALE`) enforce uploading a signed Bill of Sale (`billOfSaleStorageKey`), evaluate the DriveON 36-day SSC window (`DRIVEON_SAFETY_CERT_WARNING` appended in `"WARN_ONLY"` mode vs. `422 EXPIRED_OR_MISSING_SAFETY_CERT` in `"STRICT_BLOCK"` mode), transition the `Vehicle` to `lifecycleState = 'SOLD_RETAIL_ONTARIO'` and `availabilityState = 'PAID_SETTLED'` (freeing 1 of the 8 Ramsayville shop lot slots, and flagging `classifiedsSyncState = 'DELIST_REQUIRED'` if posted), and credit `netRealizedCadMinor` toward the vehicle's Break-Even counter and the **3-Tranche Self-Funding Working Capital Pool** (`AvailableWorkingCapital_CAD`). Because there is no separate warehouse security gate in Ontario, `isPaymentVerified` is set to `true` and `gateReleasedAt = now()` upon receipt upload.
 2. **Destination Export Vault Mode (`marketNode == 'DESTINATION_EXPORT_VAULT'` — Schema-Ready / Dormant Until Phase 3 Overseas Vault Activation):**
    * **Strict Separation of Duties & MFA `aal2` Enforcement:** Users with `HUNTER_MECHANIC` or `OVERSEAS_B2B_BUYER` roles are hard-blocked at the API and RLS layers from mutating `SaleTransaction.isPaymentVerified` when `marketNode == 'DESTINATION_EXPORT_VAULT'`. Only `TRINIDAD_VAULT_ADMIN` or `ARCHITECT_CFO` holding an active Supabase Auth JWT with Authenticator Assurance Level 2 (`aal2`) can verify payment.
    * **3-Tier Price Floor Evaluation & Negotiation Corridor (`checkoutPolicy`):**
@@ -1350,6 +1445,10 @@ export interface PricingAndCompliancePolicy {
     minPartOutRoiMultiplier: number;
   };
   domesticChannelFees: Record<string, number>;
+  domesticTaxPolicy: {
+    isOntarioEntityHstRegistered: boolean;
+    ontarioHstRate: number; // e.g., 0.13 (13% Ontario HST ring-fenced out of netRealizedCadMinor)
+  };
   araGradeMultipliers: Record<string, number>;
   complianceThresholds: {
     trinidadFiuCddThresholdTtdMinor: number;
@@ -1358,14 +1457,30 @@ export interface PricingAndCompliancePolicy {
     trinidadDepositAlertThresholdTtdMinor: number;
     cbsaCersValueThresholdCadMinor: number;
     cbsaMarineCutoffHours: number;
+    driveOnReinspectionWindowDays: number; // e.g., 10 calendar days
+    safetyStandardsCertMaxDays: number;    // e.g., 36 calendar days
   };
   operationalGates: {
+    complianceEnforcementMode: 'WARN_ONLY' | 'STRICT_BLOCK'; // Default 'WARN_ONLY' in Phase 1A to preserve physical custody truth
     workingCapitalGate: {
       enabled: boolean;
       enforcementMode: 'HARD_BLOCK' | 'WARN_ONLY' | 'DISABLED';
-      initialSeedCapitalCadMinor: number;
-      minCashReserveFloorCadMinor: number;
+      totalCommittedLoanFacilityCadMinor: number; // $44,000 CAD ($22k + $12k + $10k Senior Secured Loan)
+      initialSeedCapitalCadMinor: number;         // Active Tranche 1 baseline ($22,000 CAD)
+      minCashReserveFloorCadMinor: number;        // $7,500 CAD reserve floor
       countPendingExportCashAsAvailable: boolean;
+      tranches: Array<{
+        trancheCode: 'TRANCHE_1_LAUNCH' | 'TRANCHE_2_DAY_60' | 'TRANCHE_3_DAY_120' | string;
+        principalCadMinor: number;
+        unlocked: boolean;
+        minShelvedSkus: number;
+        minScrappedDonors: number;
+        requireZeroOverdueFloatReceipts: boolean;
+      }>;
+    };
+    dealDisciplineGate: {
+      maxDonorDismantleLandedCadMinor: number; // $3,200 CAD cap per donor SUV (1-tap cfoOverride supported)
+      enableHighEndRebuildLane: boolean;       // false in Year 1 to prevent $15k-$22k 90-day lockups (1-tap cfoOverride supported)
     };
     locationCapacityGate: {
       enforcementMode: 'HARD_BLOCK' | 'WARN_ONLY' | 'DISABLED';
@@ -1515,6 +1630,21 @@ export interface ISyndicationTemplatePort {
     sanitizedPublicImageUrls: string[];
     make: string;
   }>): string;
+  exportB2bMechanicPowertrainSheet(items: Array<{
+    qrSkuCode: string;
+    year: number;
+    make: string;
+    model: string;
+    engineSpec?: string | null;
+    odometerKm?: number | null;
+    partCategoryName: string;
+    oemPartNumbers: string[];
+    araGrade: string;
+    wholesaleAskCadMinor: number;
+  }>): {
+    whatsappMarkdownText: string;
+    csvContent: string;
+  };
 }
 
 /**

@@ -4,8 +4,8 @@
 
 To prevent regulatory or market changes from requiring code deployments, the system strictly separates **Hard Code Invariants** from **Versioned Policy Parameters**:
 
-* **Hard Code Invariants (Enforced in TypeScript Entities / DB Triggers):** Multi-schema tenant isolation (`shared`, `salvage`, `cannabis`), Kemptville 19-acre site zoning firewall (`RULE-ZONE-001`), two-phase eBay export locking (`EXPORT_LOCK_PENDING` $\rightarrow$ `EXPORT_LOCK_CONFIRMED`), append-only financial/audit/destruction records, strict separation of Vault Admin COD verification from sales brokers, single-use HMAC gate pass consumption, gram-accurate cannabis mass-balance identity, and dual-witness cannabis destruction (`primaryUserId != witnessUserId`).
-* **Configurable Policy Parameters (Stored in `src/core/config/pricing-policy.json` or `shared.Organization.policyConfigJson` via `IPolicyConfigPort`):** Customs duty percentages, VAT rates, shadow FX multipliers, LHD/RHD part-category mappings, ARA grading multipliers, data-driven physical capacity caps (`StorageLocation.maxActiveAssetCapacity`), cannabis wet-to-dry moisture loss bands, extraction yield ranges, QAP variance alert thresholds (`RULE-CAN-001`), and jurisdiction-specific document checklists.
+* **Hard Code Invariants (Enforced in TypeScript Entities / DB Triggers):** Multi-schema tenant isolation (`shared`, `salvage`, `cannabis`), Kemptville 19-acre cross-tenant site zoning firewall (`RULE-ZONE-001`), two-phase eBay export locking (`EXPORT_LOCK_PENDING` $\rightarrow$ `EXPORT_LOCK_CONFIRMED`), append-only financial/scrap/audit/destruction records, strict separation of Vault Admin COD verification from sales brokers, single-use HMAC gate pass consumption, gram-accurate cannabis mass-balance identity, and dual-witness cannabis destruction (`primaryUserId != witnessUserId`).
+* **Configurable Policy Parameters (Stored in `src/core/config/pricing-policy.json` or `shared.Organization.policyConfigJson` via `IPolicyConfigPort`):** Regulatory agility mode (`operationalGates.complianceEnforcementMode`: `"WARN_ONLY" | "STRICT_BLOCK"`, defaulting to `"WARN_ONLY"` in Phase 1A so physical custody truth is never blocked by lagging paperwork), 3-tranche `$44,000 CAD` Senior Secured Loan release milestones (`$22k / $12k / $10k`), deal discipline caps (`$3,200` donor cap & Year-1 `HIGH_END_REBUILD` pause with 1-tap `cfoOverride`), Ontario 13% HST trust ring-fencing (`domesticTaxPolicy`), DriveON 10-day re-inspection & 36-day SSC timers, customs duty/VAT rates, shadow FX multipliers, LHD/RHD part-category mappings, ARA grading multipliers, data-driven location capacity & environmental dismantling flags (`StorageLocation.maxActiveAssetCapacity`, `allowsWholeVehicleDismantling`), and cannabis mass-balance tolerances (`RULE-CAN-001`).
 
 ---
 
@@ -37,15 +37,15 @@ To prevent regulatory or market changes from requiring code deployments, the sys
 
 To maximize net CAD margin and cash velocity ($7\text{–}21$ day donor break-even) while avoiding platform bot bans, municipal bylaw complaints, and overseas credit risk, inventory is routed across channels via three operational rules:
 
-* **Rule (`RULE-MKT-001` — Weight & Geography Channel Split):** Small/light parts (`weightKg < heavyLocalOnlyThresholdKg` [$15.0\text{ kg}$]) default to `EBAY_MOTORS_SHIPPED` for North America-wide courier fulfillment; heavy/bulky assemblies (`weightKg >= 15.0 kg`) and retail lot vehicles default to local Ottawa pickup channels (`FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL`, `LOCAL_WALK_IN_CASH`, `WHOLESALE_MECHANIC_NETWORK`, `RETAIL_LOT_VEHICLE_SALE`).
-* **Rule (`RULE-MKT-002` — Kemptville Bylaw & Geolocation Stealth):** Because rural Kemptville (`KEMP`) enforces a complaint-driven municipal clean-yard bylaw, $100\%$ of product photos uploaded to `R2_PUBLIC_MEDIA_BUCKET` have EXIF GPS coordinates stripped, and $100\%$ of local classified ad payloads (`FR-MKT-00` / `FR-MKT-02`) format the pickup location strictly from `domesticSyndication.publicPickupLocationLabel` (default `"Ramsayville / East Ottawa, ON"`), routing local pickup buyers to the Ramsayville shop (`RAMS`) and never exposing the Kemptville container yard address.
+* **Rule (`RULE-MKT-001` — Weight, Geography & Day-1 B2B Mechanic Channel Split [Zero Hollander Dependency]):** Small/light parts (`weightKg < heavyLocalOnlyThresholdKg` [$15.0\text{ kg}$]) default to `EBAY_MOTORS_SHIPPED` for North America-wide courier fulfillment; heavy/bulky assemblies (`weightKg >= 15.0 kg`) and retail lot vehicles default to local Ottawa pickup channels (`FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL`, `LOCAL_WALK_IN_CASH`, `WHOLESALE_MECHANIC_NETWORK`, `CAR_PART_WHOLESALE`, `RETAIL_LOT_VEHICLE_SALE`). For high-ticket powertrains and collision front-clips, `ISyndicationTemplatePort.exportB2bMechanicPowertrainSheet` generates a Day-1 **Ottawa/Gatineau B2B Mechanic WhatsApp Markdown + CSV Broadcast Sheet** using free NHTSA vPIC + eBay Compatibility APIs (explicitly bypassing `$350–$600/mo` Solera Hollander yard-management licensing).
+* **Rule (`RULE-MKT-002` — Kemptville Bylaw & Geolocation Stealth):** Because rural Kemptville (`KEMP`) enforces a complaint-driven municipal clean-yard bylaw and `O. Reg. 85/16` dry-storage perimeter, $100\%$ of product photos uploaded to `R2_PUBLIC_MEDIA_BUCKET` have EXIF GPS coordinates stripped, and $100\%$ of local classified ad payloads (`FR-MKT-00` / `FR-MKT-02`) format the pickup location strictly from `domesticSyndication.publicPickupLocationLabel` (default `"Ramsayville / East Ottawa, ON"`), routing local pickup buyers to the Ramsayville shop (`RAMS`) and never exposing the Kemptville container warehouse address.
 * **Rule (`RULE-EXP-001` — Zero Speculative Export / 100% Pre-Paid Origin Export Gate):** While `exportPolicy.exportFulfillmentMode == 'PREPAID_ORIGIN_ONLY'` (default when no family-operated destination bonded vault is active), shipping unpurchased inventory overseas on consignment is strictly prohibited. Any export `Shipment` or `ShipmentPallet` (whole watercraft, shop equipment, or `UNIVERSAL` parts pallets to Trinidad, Barbados, or the Middle East) is hard-blocked from sealing (`422 PREPAID_EXPORT_REQUIRED`) unless $100\%$ of items on the shipment have verified upfront CAD/USD payment settled in `SETTLED_ORIGIN_CORP_BANK` (or an explicit `ARCHITECT_CFO` verified-deposit override).
 
 | Inventory Class | Primary Sales Channel(s) | Listing & Syndication Mechanism | Fee & Logistics Rationale |
 | :--- | :--- | :--- | :--- |
 | **Small / Light Electronics, Trim & `LHD_ONLY` Parts (`< 15 kg`: ECUs, radar sensors, clusters, switches, taillights, steering racks, headlamps)** | `EBAY_MOTORS_SHIPPED` | **Phase 1A Zero-Typing eBay Seller Hub Bulk CSV (`FR-MKT-00`)** $\rightarrow$ **Phase 2A Automated eBay Inventory API + Webhooks** | `50%–75%` net margin (`$2,500–$4,000+` CAD long-tail profit/car); easy to box and courier across Canada/US after `13.25%` platform fee. |
-| **Heavy / Bulky Domestic Assemblies (`>= 15 kg`: engines, transmissions, doors, hoods, bumpers, subframes, seats)** | `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL`, `LOCAL_WALK_IN_CASH`, `WHOLESALE_MECHANIC_NETWORK` | **Phase 1A 1-Click Ad Payload (`FR-MKT-00`)** + **Phase 1B Manifest V3 Chrome Extension (`FR-MKT-02`)** with `"Ramsayville / East Ottawa, ON"` stealth pickup (`RULE-MKT-002`) | `60%–85%` net margin in `1–14 days`; `0%` platform fee, `$0` freight, `0%` FX loss—recovers `~$2,500` donor cost in `14–21 days`. |
-| **Quick-Turn $5,000 Beaters & High-End Rebuilt Salvage Cars (`RAMS` Lot)** | `RETAIL_LOT_VEHICLE_SALE`, `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL` | Local Ad Queue (`FR-MKT-00`) + Chrome Extension Vehicle Autofill (`FR-MKT-02`) + Ramsayville 8-car retail lot (`StorageLocation.maxActiveAssetCapacity = 8`) | Turns CAD every `7–14 days` (`$1.5k–$2k`/beater) or `30–60 days` (`$7k–$10k`/rebuild) at `0%` fee with DriveON SSC & signed Bill of Sale (`FR-CHK-01`). |
+| **Heavy / Bulky Domestic Assemblies (`>= 15 kg`: engines, transmissions, doors, hoods, bumpers, subframes, seats)** | `WHOLESALE_MECHANIC_NETWORK`, `CAR_PART_WHOLESALE`, `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL`, `LOCAL_WALK_IN_CASH` | **Phase 1A 1-Click B2B Mechanic Powertrain Sheet & Local Ad Payload (`FR-MKT-00`)** + **Phase 1B Manifest V3 Chrome Extension (`FR-MKT-02`)** with `"Ramsayville / East Ottawa, ON"` stealth pickup (`RULE-MKT-002`) | `60%–85%` net margin in `1–14 days`; `0%` platform fee, `$0` freight, `$0` Hollander fee, `0%` FX loss—recovers `~$2,500–$3,200` donor cost in `14–21 days`. |
+| **Quick-Turn $5,000 Beaters (`RAMS` Lot; `HIGH_END_REBUILD` Paused in Year 1 Unless `cfoOverride`)** | `RETAIL_LOT_VEHICLE_SALE`, `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL` | Local Ad Queue (`FR-MKT-00`) + Chrome Extension Vehicle Autofill (`FR-MKT-02`) + Ramsayville 8-slot shop/lot (`StorageLocation.maxActiveAssetCapacity = 8`) | Turns CAD every `7–14 days` (`$1.5k–$2k`/beater) at `0%` fee with DriveON 10-day punch-list / deposit-triggered 36-day SSC & signed Bill of Sale (`FR-CHK-01`). |
 | **Pre-Paid Direct Exports (`UNIVERSAL` Pallets, Watercraft & Shop Equipment)** | `DESTINATION_PRE_ORDER_PICKUP`, `SECONDARY_ISLAND_WHOLESALE` *(or Phase 3 `DESTINATION_VAULT_COD`)* | **100% Pre-Paid Origin Export Gate (`RULE-EXP-001`)** + Broker-Ready Commercial Invoice & Packing List (`FR-LOG-01`, `FR-LOG-02`) | Eliminates overseas consignment/shrinkage risk and `60–120 day` TTD FX lockup; Destination Bonded Vault (`FR-VLT-01..05`) stays dormant until Phase 3. |
 
 ---
@@ -110,6 +110,10 @@ All configurable parameters live in `src/core/config/pricing-policy.json` and ca
     "minRebuildNetProfitCadMinor": 700000,
     "minPartOutRoiMultiplier": 2.0
   },
+  "domesticTaxPolicy": {
+    "isOntarioEntityHstRegistered": true,
+    "ontarioHstRate": 0.13
+  },
   "domesticChannelFees": {
     "LOCAL_WALK_IN_CASH": 0.0,
     "FB_MARKETPLACE_LOCAL": 0.0,
@@ -133,15 +137,45 @@ All configurable parameters live in `src/core/config/pricing-policy.json` and ca
     "trinidadDepositInsuranceCapTtdMinor": 20000000,
     "trinidadDepositAlertThresholdTtdMinor": 18000000,
     "cbsaCersValueThresholdCadMinor": 200000,
-    "cbsaMarineCutoffHours": 48
+    "cbsaMarineCutoffHours": 48,
+    "driveOnReinspectionWindowDays": 10,
+    "safetyStandardsCertMaxDays": 36
   },
   "operationalGates": {
+    "complianceEnforcementMode": "WARN_ONLY",
     "workingCapitalGate": {
       "enabled": true,
       "enforcementMode": "HARD_BLOCK",
-      "initialSeedCapitalCadMinor": 3500000,
+      "totalCommittedLoanFacilityCadMinor": 4400000,
+      "initialSeedCapitalCadMinor": 2200000,
       "minCashReserveFloorCadMinor": 750000,
-      "countPendingExportCashAsAvailable": false
+      "countPendingExportCashAsAvailable": false,
+      "tranches": [
+        {
+          "trancheCode": "TRANCHE_1_LAUNCH",
+          "principalCadMinor": 2200000,
+          "unlocked": true
+        },
+        {
+          "trancheCode": "TRANCHE_2_DAY_60",
+          "principalCadMinor": 1200000,
+          "unlocked": false,
+          "minShelvedSkus": 120,
+          "minScrappedDonors": 3
+        },
+        {
+          "trancheCode": "TRANCHE_3_DAY_120",
+          "principalCadMinor": 1000000,
+          "unlocked": false,
+          "minShelvedSkus": 400,
+          "minScrappedDonors": 8,
+          "requireZeroOverdueFloatReceipts": true
+        }
+      ]
+    },
+    "dealDisciplineGate": {
+      "maxDonorDismantleLandedCadMinor": 320000,
+      "enableHighEndRebuildLane": false
     },
     "locationCapacityGate": {
       "enforcementMode": "HARD_BLOCK"
@@ -169,7 +203,7 @@ All configurable parameters live in `src/core/config/pricing-policy.json` and ca
     "ebayCurrency": "CAD"
   },
   "siteZoningLimits": {
-    "kemptvilleMaxUncrushedShellsOnPad": 4,
+    "kemptvilleMaxUncrushedShellsOnPad": 0,
     "kemptvilleContainerCount": 4,
     "ramsayvilleMaxActiveShopVehicles": 8
   },
@@ -226,22 +260,28 @@ All configurable parameters live in `src/core/config/pricing-policy.json` and ca
         When $\text{discountAmountMinor} \le \text{MaxAdminDiscount}_{\text{TTD}}$ (or $\le 10.0\%$ in Ontario under `domesticAdminDiscountToleranceBps = 1000`), the sale is allowed for `TRINIDAD_VAULT_ADMIN` (or `HUNTER_MECHANIC` in Ontario) **IF AND ONLY IF** a valid `discountReasonCode` (`"CASH_ROUNDING" | "BUNDLE_DISCOUNT" | "TRANSIT_OR_SHOP_DAMAGE" | "AGED_INVENTORY_CLEARANCE"`) is selected.
      3. **Tier 3 (Beyond Admin Corridor — Hard Lock / CFO Override Required):** When $\text{discountAmountMinor} > \text{MaxAdminDiscount}_{\text{TTD}}$, the mutation throws `FLOOR_PRICE_OVERRIDE_REQUIRED` unless either (a) `actorRole === 'ARCHITECT_CFO'`, or (b) a valid `cfoOverrideApprovedById` + `cfoOverrideReasonNote` (via CFO Override PIN/approval) is supplied.
 
-### 4.3 Self-Funding Working Capital Pool, Domestic Net Realization, Operator Float & Destination Bank Cap Formulas
+### 4.3 3-Tranche Working Capital Pool, Ontario 13% HST Ring-Fencing, Deferred Inter-Company Accruals & Operator Float
 
-1. **Self-Funding Available Working Capital Formula (`operationalGates.workingCapitalGate`):**
-   * Rather than relying on recurring external capital infusions, the venture operates on a one-time initial seed investment (`initialSeedCapitalCadMinor`, configurable $\$20,000\text{–}\$50,000\text{ CAD}$, default $\$35,000\text{ CAD}$) that self-funds strictly out of realized domestic sales and repatriated export settlements (`SETTLED_ORIGIN_CORP_BANK`, when `countPendingExportCashAsAvailable == false`):
-   $$\text{AvailableWorkingCapital}_{\text{CAD}} = \text{InitialSeedCapital}_{\text{CAD}} + \sum \text{NetRealizedDomesticSales}_{\text{CAD}} + \sum \text{RepatriatedExportSettlements}_{\text{CAD}} - \sum \text{TotalDeployedAcquisitionAndExpenseOutlay}_{\text{CAD}}$$
-   * A proposed vehicle acquisition passes the Working Capital Gate (`FR-DEAL-01` / `FR-INT-01`) if and only if:
-   $$\text{AvailableWorkingCapital}_{\text{CAD}} - \text{EstimatedDealOutlay}_{\text{CAD}} \ge \text{minCashReserveFloorCadMinor} \quad (\$7,500\text{ CAD})$$
-   (or if `enforcementMode == "WARN_ONLY" | "DISABLED"` or explicitly overridden by `ARCHITECT_CFO`).
-2. **Domestic Channel Fee & Net Realization (`netRealizedCadMinor`):**
-   * Local origin cash/e-Transfer channels (`LOCAL_WALK_IN_CASH`, `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL`, `RETAIL_LOT_VEHICLE_SALE`, `WHOLESALE_MECHANIC_NETWORK`) incur $0\%$ platform fees ($r_{\text{channel\_fee}} = 0.0$), whereas `EBAY_MOTORS_SHIPPED` deducts $13.25\%$ ($r_{\text{channel\_fee}} = 0.1325$) plus outbound courier label costs:
+1. **3-Tranche `$44,000 CAD` Senior Secured Loan, Deferred Accruals & Deal Discipline Gates (`operationalGates.workingCapitalGate` & `dealDisciplineGate`):**
+   * Rather than deploying `$44,000 CAD` upfront as unprotected equity, seed capital is structured as a **Senior Secured Working Capital Loan Facility (`totalCommittedLoanFacilityCadMinor = 4400000`)** released in **3 milestone tranches** (`TRANCHE_1_LAUNCH = $22,000 CAD` [`unlocked: true`, yielding `$14,500 CAD` active Day-1 buying power above the `$7,500 CAD` reserve floor to fund 2 quick-turn beaters + 3 donor SUVs], `TRANCHE_2_DAY_60 = $12,000 CAD` [`minShelvedSkus: 120`, `minScrappedDonors: 3`], and `TRANCHE_3_DAY_120 = $10,000 CAD` [`minShelvedSkus: 400`, `minScrappedDonors: 8`, `requireZeroOverdueFloatReceipts: true`]).
+   * **Deferred Inter-Company Lease Accrual (`ITA s. 78(1)` — `Expense.isDeferredIntercompanyAccrual`):** Inter-company pad/container storage rent (`Small Roots Inc.`) and ERP/equipment leases (`Calgary IT HoldCo`) logged with `isDeferredIntercompanyAccrual == true` and `accrualSettledAt == null` accrue on the GL balance sheet (deferrable up to two taxation years under Canadian *Income Tax Act* `s. 78(1)` when unpaid at arm's length / agreed terms) and are **excluded from liquid cash drain** in `AvailableWorkingCapital_CAD` until `accrualSettledAt` is stamped:
+   $$\text{ActiveReleasedTrancheCapital}_{\text{CAD}} = \sum_{t \in \text{Tranches},\; t.\text{unlocked}=\text{true}} t.\text{principalCadMinor} \quad (\$22,000\text{ CAD at Launch})$$
+   $$\text{AvailableWorkingCapital}_{\text{CAD}} = \text{ActiveReleasedTrancheCapital}_{\text{CAD}} + \sum \text{NetRealizedDomesticSales}_{\text{CAD}} + \sum \text{ScrapComponentLog.payoutCadMinor} + \sum \text{RepatriatedExportSettlements}_{\text{CAD}} - \sum \text{CashDeployedAcquisitionsAndSettledExpenses}_{\text{CAD}}$$
+   * **Enforced Capital & Deal Discipline Caps with 1-Tap `cfoOverride`:**
+     1. **Reserve Floor Gate:** $\text{AvailableWorkingCapital}_{\text{CAD}} - \text{EstimatedDealOutlay}_{\text{CAD}} \ge \text{minCashReserveFloorCadMinor}$ ($\$7,500\text{ CAD}$).
+     2. **Donor SUV Landed Cap (`maxDonorDismantleLandedCadMinor = 320000`):** Blocks `DISMANTLE_AND_EXPORT` acquisitions whose estimated landed outlay (bid + auction fee + tow to Ramsayville) exceeds **`$3,200.00 CAD`**.
+     3. **Year-1 High-End Rebuild Pause (`enableHighEndRebuildLane = false`):** Blocks `operationalLane == 'HIGH_END_REBUILD'` acquisitions during Year 1 to prevent 60–120 day frame-bench/MTO inspection cash lockups.
+     4. **1-Tap `cfoOverride` Escape Hatch:** Every capital, tranche, donor-cap, lane-pause, and `StorageLocation.maxActiveAssetCapacity` gate supports a **1-Tap `cfoOverride`** (`cfoOverride: { approved: true, reasonNote }` executed by `ARCHITECT_CFO`), persisting `cfoGateApprovedById`, `cfoGateApprovedAt`, `cfoGateOverrideReason`, and an immutable `AuditLog` entry without blocking opportunistic deals.
+2. **Rule `RULE-TAX-HST-01` — Ontario 13% HST Trust Ring-Fencing & Domestic Net Realization (`domesticTaxPolicy`):**
+   * Because the venture exceeds the `$30,000 CAD` CRA Small Supplier threshold within Quarter 1, `domesticTaxPolicy.isOntarioEntityHstRegistered` defaults to `true` (`ontarioHstRate = 0.13`) so Day-1 Input Tax Credits (ITCs) on vehicle acquisitions, tools, and supplies are recoverable while collected output HST is strictly ring-fenced as CRA trust money:
+   $$\text{TaxOrVat}_{\text{CAD}} = \begin{cases} \text{round}\left(\text{Subtotal}_{\text{CAD}} \times 0.13\right) & \text{if } \text{isOntarioEntityHstRegistered} = \text{true} \\ 0 & \text{otherwise} \end{cases}$$
+   $$\text{GrossCollected}_{\text{CAD}} = \text{Subtotal}_{\text{CAD}} + \text{TaxOrVat}_{\text{CAD}}$$
    $$\text{PlatformFee}_{\text{CAD}} = \text{round}\left(\text{Subtotal}_{\text{CAD}} \times r_{\text{channel\_fee}}\right)$$
-   $$\text{NetRealized}_{\text{CAD}} = \text{GrossCollected}_{\text{CAD}} - \text{PlatformFee}_{\text{CAD}} - \text{ShippingCost}_{\text{CAD}}$$
-   * `netRealizedCadMinor` is credited directly toward the donor `Vehicle` Break-Even Velocity counter and the **Self-Funding Working Capital Pool** (`AvailableWorkingCapital_CAD`).
+   $$\text{NetRealized}_{\text{CAD}} = \text{Subtotal}_{\text{CAD}} - \text{PlatformFee}_{\text{CAD}} - \text{ShippingCost}_{\text{CAD}}$$
+   * **Hard Invariant:** `taxOrVatMinor` (`13%` HST collected on `DOMESTIC_ORIGIN` sales) is tracked in a dedicated CRA HST Trust Liability counter (`RunningHstPayableTrust_CAD`) and is **NEVER** included in `netRealizedCadMinor`, donor `Vehicle` Break-Even Velocity, `AvailableWorkingCapital_CAD`, or `DistributableRealizedProfitPool_CAD` (`RULE-PAY-002`).
 3. **Operator Float Reconciliation & Tiered Receipt/Voucher Policy (`HELD_IN_OPERATOR_FLOAT` & `expensePolicy`):**
-   * Cash collected in Ontario with `cashCustodyState == 'HELD_IN_OPERATOR_FLOAT'` is tracked as an auditable petty-cash subledger balance that decreases when shop `Expense` rows are logged with `paidFromCashCustody == 'HELD_IN_OPERATOR_FLOAT'` or when physical cash is deposited into the Canadian corporate bank account via `CashCustodyTransfer` (`SETTLED_ORIGIN_CORP_BANK`):
-   $$\text{RunningOperatorFloat}_{\text{CAD}} = \sum \text{SaleTransaction}_{\text{HELD\_IN\_OPERATOR\_FLOAT}} - \sum \text{Expense}_{\text{paidFromFloat}} - \sum \text{CashCustodyTransfer}_{\text{FLOAT}\rightarrow\text{ORIGIN\_CORP\_BANK}}$$
+   * Physical cash collected in Ontario with `cashCustodyState == 'HELD_IN_OPERATOR_FLOAT'`—comprising both taxable/non-taxable cash sales (`SaleTransaction.grossCollectedMinor`, which includes any physical HST cash handed to the operator) and cash recycler payouts (`ScrapComponentLog.payoutCadMinor`)—is tracked as an auditable petty-cash subledger balance that decreases when shop `Expense` rows are logged with `paidFromCashCustody == 'HELD_IN_OPERATOR_FLOAT'` or when physical cash is deposited into the Canadian corporate bank account via `CashCustodyTransfer` (`SETTLED_ORIGIN_CORP_BANK`):
+   $$\text{RunningOperatorFloat}_{\text{CAD}} = \sum \text{SaleTransaction.grossCollectedMinor}_{\text{FLOAT}} + \sum \text{ScrapComponentLog.payoutCadMinor}_{\text{FLOAT}} - \sum \text{Expense}_{\text{paidFromFloat}} - \sum \text{CashCustodyTransfer}_{\text{FLOAT}\rightarrow\text{ORIGIN\_CORP\_BANK}}$$
    * **Tiered Receipt Verification (`ReceiptVerificationState`):**
      * `VERIFIED_RECEIPT`: Required for all expenses $> \text{pettyCashVoucherMaxCadMinor}$ ($\$50\text{ CAD}$) prior to final settlement; enforces non-empty `receiptStorageKey` in `R2_PRIVATE_EVIDENCE_BUCKET`.
      * `PETTY_CASH_VOUCHER`: Permitted for minor unreceipted cash expenses $\le \$50\text{ CAD}$ with a mandatory `voucherReason` ($\ge 5\text{ chars}$), subject to a rolling 30-day operator cap of `monthlyUnreceiptedVoucherCapCadMinor` ($\$250\text{ CAD/month}$).
@@ -250,13 +290,14 @@ All configurable parameters live in `src/core/config/pricing-policy.json` and ca
    * Running TTD balances per Trinidadian commercial bank institution ($k$) reconcile direct buyer bank transfers, physical Vault cash deposits (`HELD_IN_DESTINATION_VAULT` $\rightarrow$ `DEPOSITED_DESTINATION_BANK`, where physical vault cash from counter sales equals $\text{grossCollectedMinor} - (\text{isBrokerCommissionDeductedAtCounter} \text{ ? } \text{brokerCommissionMinor} : 0)$) via `CashCustodyTransfer`, and outbound FX repatriation batches (`CurrencySettlement` $\rightarrow$ `SETTLED_ORIGIN_CORP_BANK`):
    $$\text{DestinationBankBalance}_{\text{Bank } k} = \sum \text{DirectWireSales}_{\text{Bank } k} + \sum \text{CashCustodyTransfer}_{\text{VAULT}\rightarrow\text{Bank } k} - \sum \text{CurrencySettlement}_{\text{From Bank } k}$$
 
-### 4.4 Two-Stage Donor Cost Allocation, Market Price Guard & 3-Tier Shipment Profitability
+### 4.4 5-Stream Commodity Scrap Protocol (`ScrapComponentLog`), Two-Stage Donor Cost Allocation & 3-Tier Shipment Profitability
 
-1. **Two-Stage Donor Cost Allocation Rule (Provisional at Strip $\rightarrow$ Final True-Up at Hulk Scrap):**
-   * To resolve the operational timing mismatch between stripping/pricing a part on Day 2 and weighing the crushed scrap hulk on Day 14, donor cost allocation operates in two stages:
+1. **5-Stream Commodity Scrap Separation (`ScrapComponentLog`) & Two-Stage Donor Cost Allocation:**
+   * Crushing an unstripped shell as mixed tin yields only `$180–$320 CAD`, whereas separating the **5 high-value scrap streams** via `salvage.ScrapComponentLog` (`CATALYTIC_CONVERTER`, `ALUMINUM_ALLOY_WHEELS`, `COPPER_WIRING_HARNESS`, `ROTORS_AND_BATTERY`, `BARE_STEEL_SHELL`) establishes a **`$550–$900 CAD` hard cash recovery floor** per donor SUV (`weightKg`, `payoutCadMinor`, `recyclerName`, `recyclerTicketStorageKey` in `R2_PRIVATE_EVIDENCE_BUCKET`, and `cashCustodyState`: `SETTLED_ORIGIN_CORP_BANK` or `HELD_IN_OPERATOR_FLOAT`).
+   * **Catalytic Converter Anti-Shrinkage Check (`catalyticConverterDisposition`):** Transitioning an `AUTOMOBILE` to `SCRAPPED_METAL_CLEARED` verifies whether `catalyticConverterDisposition` is reconciled (`MISSING_AT_INTAKE`, `LOGGED_SCRAP_SALE` with a matching `CATALYTIC_CONVERTER` `ScrapComponentLog`, or `SHELVED_AS_PART`). Under `complianceEnforcementMode == 'WARN_ONLY'` (Phase 1A default), an unreconciled cat **never blocks** hulk clearance—the transition succeeds and appends `'UNRECONCILED_CATALYTIC_CONVERTER'` to `Vehicle.complianceWarnings` and `AuditLog` (`422` in `'STRICT_BLOCK'`).
    * **Stage 1 — Provisional Cost Basis (At Part Strip Time):** When a part is stripped from an active donor vehicle (`DISMANTLING_IN_PROGRESS`), its initial `allocatedCostBasisCadMinor` is computed using the vehicle's acquisition price plus logged direct expenses (towing, auction buyer fees, strip labor) to date, weighted against the greater of the vehicle's target gross realization or cumulative stripped parts market value:
      $$\text{ProvisionalCostBasis}_{\text{Part}} = \left(\text{ActualPurchasePrice}_{\text{CAD}} + \text{LoggedDirectExpenses}_{\text{CAD}}\right) \times \frac{\text{GradeAdjustedMarketValue}_{\text{CAD}}}{\max\left(\text{TargetGrossRealization}_{\text{CAD}}, \sum \text{StrippedPartsMarketValue}_{\text{CAD}}\right)}$$
-   * **Stage 2 — Final Cost Basis True-Up (At `HULK_AWAITING_SCRAP` / `SCRAPPED_METAL_CLEARED`):** When dismantling completes and `scrapRecoveryCadMinor` is recorded from `scrapMetalTicketKey`, the system reconciles the exact remaining unrecovered donor cost ($\text{TotalDonorOutlay}_{\text{CAD}} - \text{ScrapRecovery}_{\text{CAD}} - \sum \text{AlreadySoldPartsAllocatedCost}_{\text{CAD}}$) pro-rata across all remaining unsold stripped parts so the accounting identity holds $100\%$:
+   * **Stage 2 — Incremental & Final Cost Basis True-Up (On Each `ScrapComponentLog` & At `SCRAPPED_METAL_CLEARED`):** `Vehicle.scrapRecoveryCadMinor` equals $\sum \text{ScrapComponentLog.payoutCadMinor}$. As each commodity stream and final hulk scale ticket is recorded, the system reconciles the exact remaining unrecovered donor cost ($\text{TotalDonorOutlay}_{\text{CAD}} - \text{ScrapRecovery}_{\text{CAD}} - \sum \text{AlreadySoldPartsAllocatedCost}_{\text{CAD}}$) pro-rata across all remaining unsold stripped parts so the accounting identity holds $100\%$:
      $$\sum_{i=1}^{n} \text{Part.allocatedCostBasisCadMinor}_i + \text{Vehicle.scrapRecoveryCadMinor} = \text{Vehicle.totalAcquisitionAndStripCostCadMinor}$$
 2. **Rule `RULE-PRC-001` (Floor-Exceeds-Market Guard):**
    * During pre-auction Deal Analysis and pre-shipment Pallet Scanning, if an item's computed `vaultFloorPriceTtdMinor > brokerMarketPriceTtdMinor`, the system flags a high-visibility `MARGIN_INVERSION_WARNING` blocking export packing unless explicitly overridden by `ARCHITECT_CFO`.
@@ -277,10 +318,10 @@ To prevent working-capital burn on unsupervised yard labor or premature founder 
    * A donor `Vehicle` ($v$) is eligible for a `YARD_STRIPPER_PIECE_RATE` expense payout if and only if:
      $$\text{Vehicle}_v.\text{fluidsDrainedAt} \neq \text{NULL} \quad \land \quad \left|\left\{ p \in \text{Parts}(v) \;\middle|\; p.\text{custodyState} = \text{'SHELVED\_ORIGIN\_CONTAINER'} \land |p.\text{rawPhotoUrls}| \ge 1 \right\}\right| \ge N_{\text{min\_shelved}}$$
      where $N_{\text{min\_shelved}} = 35$ (`minShelvedPartsForStripPayout` for `AUTOMOBILE`).
-2. **Rule `RULE-PAY-002` (Seed Capital Protection — Zero Founder Salaries from Initial Seed Principal):**
-   * The one-time initial seed capital pool (`initialSeedCapitalCadMinor`, configurable $\$20,000\text{–}\$50,000\text{ CAD}$) is strictly reserved for inventory acquisition, repair parts, piece-rate stripping, and freight/customs (`allowFounderDrawFromSeedCapital = false`).
-   * Founder profit draws (`category == 'PARTNER_PROFIT_DRAW'`) may only be disbursed when cumulative realized net profit across completed domestic and repatriated export sales exceeds cumulative expenses and prior draws:
-     $$\text{DistributableRealizedProfitPool}_{\text{CAD}} = \sum \text{SaleTransaction.netRealizedCadMinor}_{\text{settled}} + \sum \text{Vehicle.scrapRecoveryCadMinor} - \sum \text{Expense.amountCadMinor}_{\text{settled}}$$
+2. **Rule `RULE-PAY-002` (Loan Principal & HST Trust Protection — Zero Founder Salaries from Loan Facility or CRA HST):**
+   * The `$44,000 CAD` Senior Secured Working Capital Loan Facility (`ActiveReleasedTrancheCapital_CAD` / `initialSeedCapitalCadMinor`) and collected 13% Ontario HST trust funds (`taxOrVatMinor` per `RULE-TAX-HST-01`) are strictly ring-fenced from founder draws (`allowFounderDrawFromSeedCapital = false`).
+   * Founder profit draws (`category == 'PARTNER_PROFIT_DRAW'`) may only be disbursed when cumulative pre-HST realized net profit across completed domestic sales, 5-stream scrap recoveries (`Vehicle.scrapRecoveryCadMinor`), and repatriated export sales exceeds cumulative expenses (including accrued expenses) and prior draws:
+     $$\text{DistributableRealizedProfitPool}_{\text{CAD}} = \sum \text{SaleTransaction.netRealizedCadMinor}_{\text{settled}} + \sum \text{Vehicle.scrapRecoveryCadMinor} - \sum \text{Expense.amountCadMinor}_{\text{all\_non\_voided}}$$
      $$\text{RequestedPartnerDraw}_{\text{CAD}} \le \max\left(0,\; \text{DistributableRealizedProfitPool}_{\text{CAD}}\right)$$
 3. **Rule `RULE-PAY-003` (Bi-Weekly Operator Float Offset on Partner Draws):**
    * When disbursing an approved `PARTNER_PROFIT_DRAW` ($\text{DrawApproved}_{\text{CAD}}$) to `HUNTER_MECHANIC`, any positive cash balance currently held in `RunningOperatorFloat_CAD` (`HELD_IN_OPERATOR_FLOAT`) is deducted first:
@@ -313,17 +354,20 @@ To prevent working-capital burn on unsupervised yard labor or premature founder 
 
 ---
 
-## 6. Jurisdiction-Specific Compliance Dossier Checklists
+## 6. Jurisdiction-Specific Compliance Dossier Checklists & `WARN_ONLY` Agility Protocol
 
-### 6.1 Ontario MTO Salvage-to-Rebuilt File (`R.R.O. 1990, Reg. 601` — Automobiles Only)
+> **Phase 1A Physical Custody Agility Invariant (`operationalGates.complianceEnforcementMode`):** When `complianceEnforcementMode == 'WARN_ONLY'` (Phase 1A default), missing paperwork or timestamps across Ontario HTA s. 60 intake, `O. Reg. 85/16` farm scans, catalytic converter hulk clearance, or DriveON SSC checkout **NEVER throws a blocking HTTP `422`**—the physical custody scan or state transition always succeeds so PostgreSQL matches physical yard reality, appending structured warning codes (`MISSING_HTA_S60_DOCS`, `COMPLIANCE_WARNING_UNDRAINED_FARM`, `UNRECONCILED_CATALYTIC_CONVERTER`, `DRIVEON_SAFETY_CERT_WARNING`) to `complianceWarnings` (`String[]`) and `AuditLog` for asynchronous CFO clearance. Switching `complianceEnforcementMode` to `'STRICT_BLOCK'` escalates all four checks to hard HTTP `422` blocks.
 
-Stored in `Vehicle.rebuildDossierJson` with private file keys in `R2_PRIVATE_EVIDENCE_BUCKET`:
+### 6.1 Ontario HTA Section 60 Register, DriveON 10-Day / 36-Day Timers & MTO Reg. 601 (`AUTOMOBILE` Only)
 
-1. **`insurerRepairEstimateKey`:** Mandatory insurance company repair estimate (or authorized appraiser estimate).
-2. **`preRepairDamagePhotoKeys`:** Minimum **2 colour photographs** showing damaged front/rear and both sides prior to any repair work.
-3. **`frameBenchPhotoKey`:** Minimum **1 colour photograph** of the vehicle mounted on the structural frame-alignment bench in Ramsayville.
-4. **`rebuiltPartsAuditFormKey`:** Completed MTO Rebuilt Vehicle Parts Audit Form itemizing every major replacement assembly with its donor VIN and linked `Expense` receipt.
-5. **`driveOnSicCertKey` & `driveOnSscCertKey`:** Issued Structural Inspection Certificate (SIC) and Safety Standards Certificate (SSC, valid strictly for **36 calendar days** from `driveOnSscIssuedAt`). *(Note: Watercraft and Shop Equipment automatically bypass this checklist.)*
+1. **Ontario *Highway Traffic Act* Section 60 Statutory Garage & Wrecking Register (`FR-INT-01`):**
+   * Every `AUTOMOBILE` intake captures `acquisitionSource` (`LICENSED_AUCTION | PRIVATE_DRIVEWAY_BUY | DEALER_WHOLESALE | TRADE_IN`), `sellerFullName`, `sellerAddress`, `sellerPhotoIdStorageKey` (mandatory in `R2_PRIVATE_EVIDENCE_BUCKET` for `PRIVATE_DRIVEWAY_BUY` / `TRADE_IN`), `ontarioPermitNumber` (6–12 char MTO green-slip permit #), and `declaredStatutoryPurpose` (`WRECKING_PARTS_ONLY | RETAIL_RESALE | EXPORT_WHOLE`), powering a read-only statutory police/MTO inspection register view (`?view=hta-s60-register`).
+   * Missing `sellerFullName`, `ontarioPermitNumber`, or private-seller `sellerPhotoIdStorageKey` appends `'MISSING_HTA_S60_DOCS'` in `'WARN_ONLY'` mode (or throws `422 MISSING_HTA_S60_DOCS` in `'STRICT_BLOCK'` mode).
+2. **DriveON 10-Day Re-Inspection Punch-List & Deposit-Triggered 36-Day SSC (`driveOnReinspectionWindowDays = 10`, `safetyStandardsCertMaxDays = 36`):**
+   * **Pre-Sale Punch-List Strategy:** Retail flip beaters (`QUICK_TURN_BEATER`) undergo an initial DriveON tablet inspection upon arrival at Ramsayville (`driveOnInitialFailAt`, `driveOnFailSheetStorageKey`), automatically computing `driveOnReinspectionDeadlineAt = driveOnInitialFailAt + 10 calendar days` (`driveOnReinspectionWindowDays`) so repairs are completed inside the reduced-fee re-inspection window without starting the 36-day SSC expiration clock prematurely.
+   * **Deposit-Triggered Final SSC:** The final DriveON Safety Standards Certificate (`driveOnSscIssuedAt`, `driveOnSscExpiresAt = driveOnSscIssuedAt + 36 calendar days`) is pulled once a buyer deposit is secured. At `RETAIL_LOT_VEHICLE_SALE` checkout (`FR-CHK-01`), an absent or expired SSC (`now() > driveOnSscExpiresAt`) appends `'DRIVEON_SAFETY_CERT_WARNING'` in `'WARN_ONLY'` mode (or throws `422 EXPIRED_OR_MISSING_SAFETY_CERT` in `'STRICT_BLOCK'` mode), while signed `billOfSaleStorageKey` and `paymentProofStorageKey` remain strictly mandatory.
+3. **MTO Salvage-to-Rebuilt Dossier (`R.R.O. 1990, Reg. 601` — `Vehicle.rebuildDossierJson` in `R2_PRIVATE_EVIDENCE_BUCKET`):**
+   * *(Paused in Year 1 unless `cfoOverride` per `dealDisciplineGate.enableHighEndRebuildLane = false`)*: `insurerRepairEstimateKey`, `preRepairDamagePhotoKeys` ($\ge 2$ colour photos), `frameBenchPhotoKey` ($\ge 1$ frame-alignment bench photo), `rebuiltPartsAuditFormKey` (itemizing donor VINs & linked `Expense` receipts), and `driveOnSicCertKey` + `driveOnSscCertKey`. *(Watercraft and Shop Equipment automatically bypass all HTA/DriveON/MTO checklists.)*
 
 ### 6.2 Trinidad & Tobago FIU & Customs Clearance Checklist
 
@@ -333,23 +377,26 @@ Stored in `Vehicle.rebuildDossierJson` with private file keys in `R2_PRIVATE_EVI
 
 ---
 
-## 7. Data-Driven Site Zoning & Multi-Tenant Location Invariant (`RULE-ZONE-001`)
+## 7. Data-Driven Site Zoning & Zero-Fluid Farm Rule (`RULE-ZONE-001` & `RULE-ENV-001`)
 
-**Context:** The 19-acre Kemptville property (`siteCode == 'KEMP'`) hosts both a dedicated 100ft x 100ft salvage container pad (`ORG_SALVAGE_EXPORT`) and agricultural/nursery zones (`ORG_CANNABIS_NURSERY_PROC`). Rather than hardcoding site names in TypeScript services, physical location barcodes are governed by two data-driven columns on `shared.StorageLocation` (`allowedOrgType` and `maxActiveAssetCapacity`) to protect municipal clean-yard compliance, Health Canada site inspection optics, and commercial SaaS portability:
+**Context:** The 19-acre Kemptville agricultural property (`siteCode == 'KEMP'`) hosts both a 4-container dry auto-parts warehouse (`ORG_SALVAGE_EXPORT`, `C01`–`C04`) and agricultural/nursery zones (`ORG_CANNABIS_NURSERY_PROC`). Under Ontario **`O. Reg. 85/16` (End-of-Life Vehicles — EASR)**, dismantling fluid-bearing motor vehicles on unsealed rural gravel/soil triggers setback, impermeable-pad, oil-water separator, and Ministry environmental enforcement risks—and directly endangers Health Canada cannabis nursery site optics. Physical location barcodes are therefore governed by three data-driven columns on `shared.StorageLocation` (`allowedOrgType`, `allowsWholeVehicleDismantling`, and `maxActiveAssetCapacity`):
 
-* **Rule (`RULE-ZONE-001`):**
-  1. **`ZONE_CONTAINER_PAD` (100ft x 100ft Pad, Containers `C01`–`C04`, e.g., `KEMP-C01-R01-S01-B01`):** Configured with `allowedOrgType = 'SALVAGE_AND_EXPORT'` and `maxActiveAssetCapacity = 4` on the dismantling pad (and `null` on individual shelf bins). Strictly restricted to `ORG_SALVAGE_EXPORT` assets (`salvage.Vehicle` and `salvage.Part`), enforcing a maximum of **4 uncrushed vehicle shells** (`STAGED_ONTARIO_YARD`, `DISMANTLING_IN_PROGRESS`, or `HULK_AWAITING_SCRAP`) on the pad at any time.
-  2. **`ZONE_GREENHOUSE_AG` & `ZONE_TREE_FARM` (e.g., `KEMP-GRNH-R1-T1`, `KEMP-TREE-R1-B1`) and Brockville Facility (`BROCK-PROP-R1-T2`):** Configured with `allowedOrgType = 'CANNABIS_NURSERY_AND_PROCESSING'`. Strictly restricted to agricultural and nursery operations (`ORG_CANNABIS_NURSERY_PROC` — `cannabis.CannabisLot`).
-  3. **Cross-Zone & Cross-Tenant Scan Hard Block:** Scanning any `salvage.Vehicle` or `salvage.Part` into a location where `allowedOrgType != 'SALVAGE_AND_EXPORT'`—or scanning any `cannabis.CannabisLot` into a location where `allowedOrgType != 'CANNABIS_NURSERY_AND_PROCESSING'`—is **hard-blocked** at the application and database layers (HTTP `422 Unprocessable Entity` — `SITE_ZONING_VIOLATION`).
+* **Rules (`RULE-ZONE-001` & `RULE-ENV-001`):**
+  1. **`RAMS` / `ZONE_RAMSAYVILLE_SHOP` (Sealed Concrete Teardown Bay & 8-Slot Retail Lot):** Configured with `allowedOrgType = 'SALVAGE_AND_EXPORT'`, `allowsWholeVehicleDismantling = true`, and `maxActiveAssetCapacity = 8` (overridable via 1-tap `cfoOverride`). All whole-vehicle fluid depollution (`fluidsDrainedAt`), powertrain extraction, 5-stream commodity scrap separation, and retail beater storage occur on sealed commercial concrete in Ramsayville.
+  2. **`KEMP` / `ZONE_CONTAINER_PAD` (Dry Clean-Parts Container Warehouse `C01`–`C04`, e.g., `KEMP-C01-R01-S01-B01`):** Configured with `allowedOrgType = 'SALVAGE_AND_EXPORT'`, `allowsWholeVehicleDismantling = false`, and `maxActiveAssetCapacity = 0` on the outdoor pad (`kemptvilleMaxUncrushedShellsOnPad = 0`, and `null` on individual dry container shelf bins `C01`–`C04`). Restricted to dry, pre-drained, tagged `salvage.Part` inventory (`RULE-ENV-001`). If an operator scans a whole `AUTOMOBILE` or an undrained fluid-bearing powertrain `Part` (`Vehicle.fluidsDrainedAt == null`) into a location where `allowsWholeVehicleDismantling == false`:
+     * **`complianceEnforcementMode == 'WARN_ONLY'` (Phase 1A Default):** The custody scan **succeeds** so physical location truth is never lost, and `'COMPLIANCE_WARNING_UNDRAINED_FARM'` is appended to `CustodyEvent.complianceWarnings`, the target entity's `complianceWarnings`, and `AuditLog`.
+     * **`complianceEnforcementMode == 'STRICT_BLOCK'`:** Rejected with HTTP `422 Unprocessable Entity` (`ENVIRONMENTAL_ZONING_VIOLATION`).
+  3. **`ZONE_GREENHOUSE_AG` & `ZONE_TREE_FARM` (`KEMP-GRNH-*`, `KEMP-TREE-*`) and Brockville Facility (`BROCK-*`):** Configured with `allowedOrgType = 'CANNABIS_NURSERY_AND_PROCESSING'` and `allowsWholeVehicleDismantling = false`. Strictly restricted to `ORG_CANNABIS_NURSERY_PROC` (`cannabis.CannabisLot`).
+  4. **Cross-Tenant Scan Hard Block (Always Enforced Regardless of `complianceEnforcementMode`):** Scanning any `salvage.Vehicle` or `salvage.Part` into a location where `allowedOrgType != 'SALVAGE_AND_EXPORT'`—or scanning any `cannabis.CannabisLot` into a location where `allowedOrgType != 'CANNABIS_NURSERY_AND_PROCESSING'`—is **ALWAYS hard-blocked** at the application and database layers (HTTP `422 Unprocessable Entity` — `SITE_ZONING_VIOLATION`).
 
-| Site & Zone Code (`siteCode` / `zoneCode`) | Owning Organization (`Organization.code`) | `StorageLocation.allowedOrgType` | `StorageLocation.maxActiveAssetCapacity` | Allowed Domain Entities & Compliance Gate |
-| :--- | :--- | :--- | :---: | :--- |
-| **`KEMP` / `ZONE_CONTAINER_PAD`** | `ORG_SALVAGE_EXPORT` | `SALVAGE_AND_EXPORT` | `4` (Pad) / `null` (Bins) | `salvage.Vehicle`, `salvage.Part` — Max 4 uncrushed shells on 100ft x 100ft pad; 4x 40ft containers (`C01`–`C04`). |
-| **`KEMP` / `ZONE_GREENHOUSE_AG`** | `ORG_CANNABIS_NURSERY_PROC` | `CANNABIS_NURSERY_AND_PROCESSING` | `null` | `cannabis.CannabisLot` — Zero automotive/marine salvage items permitted; Health Canada nursery perimeter. |
-| **`KEMP` / `ZONE_TREE_FARM`** | `ORG_CANNABIS_NURSERY_PROC` | `CANNABIS_NURSERY_AND_PROCESSING` | `null` | `cannabis.CannabisLot` — Agricultural/horticultural propagation only; zero salvage parts/vehicles permitted. |
-| **`RAMS` / `ZONE_RAMSAYVILLE_SHOP`** | `ORG_SALVAGE_EXPORT` | `SALVAGE_AND_EXPORT` | `8` (Retail Lot) | `salvage.Vehicle`, `salvage.Part` — Max 8 active vehicles (`ramsayvilleMaxActiveShopVehicles = 8`). |
-| **`POSV` / `ZONE_TRINIDAD_VAULT`** | `ORG_SALVAGE_EXPORT` | `SALVAGE_AND_EXPORT` | `null` | `salvage.Vehicle`, `salvage.Part` — Bonded family warehouse in Port of Spain; weekly blind cycle counts (`FR-VLT-05`). |
-| **`BROCK` / `ZONE_BROCKVILLE_FACILITY`** | `ORG_CANNABIS_NURSERY_PROC` | `CANNABIS_NURSERY_AND_PROCESSING` | `null` | `cannabis.CannabisLot` — Indoor propagation, drying/curing, extraction ("moving the juice"), and CTLS vault. |
+| Site & Zone Code (`siteCode` / `zoneCode`) | Owning Organization (`Organization.code`) | `allowedOrgType` | `allowsWholeVehicleDismantling` | `maxActiveAssetCapacity` | Allowed Domain Entities & Compliance Gate |
+| :--- | :--- | :--- | :---: | :---: | :--- |
+| **`KEMP` / `ZONE_CONTAINER_PAD`** | `ORG_SALVAGE_EXPORT` | `SALVAGE_AND_EXPORT` | `false` | `0` (Pad) / `null` (Bins) | Dry `salvage.Part` warehouse (`C01`–`C04`, `O. Reg. 85/16`); whole `AUTOMOBILE` / undrained powertrain scan emits `COMPLIANCE_WARNING_UNDRAINED_FARM` in `WARN_ONLY` (`422` in `STRICT_BLOCK`). |
+| **`KEMP` / `ZONE_GREENHOUSE_AG`** | `ORG_CANNABIS_NURSERY_PROC` | `CANNABIS_NURSERY_AND_PROCESSING` | `false` | `null` | `cannabis.CannabisLot` — Zero salvage items permitted (`422 SITE_ZONING_VIOLATION`); Health Canada nursery perimeter. |
+| **`KEMP` / `ZONE_TREE_FARM`** | `ORG_CANNABIS_NURSERY_PROC` | `CANNABIS_NURSERY_AND_PROCESSING` | `false` | `null` | `cannabis.CannabisLot` — Agricultural/horticultural propagation only; zero salvage parts/vehicles permitted. |
+| **`RAMS` / `ZONE_RAMSAYVILLE_SHOP`** | `ORG_SALVAGE_EXPORT` | `SALVAGE_AND_EXPORT` | `true` | `8` (Shop + Lot) | `salvage.Vehicle`, `salvage.Part` — Sealed concrete fluid drainage, teardown & retail beater lot (`maxActiveAssetCapacity = 8`, 1-tap `cfoOverride`). |
+| **`POSV` / `ZONE_TRINIDAD_VAULT`** | `ORG_SALVAGE_EXPORT` | `SALVAGE_AND_EXPORT` | `false` | `null` | `salvage.Vehicle`, `salvage.Part` — Dormant Phase 3 bonded warehouse in Port of Spain; weekly blind cycle counts (`FR-VLT-05`). |
+| **`BROCK` / `ZONE_BROCKVILLE_FACILITY`** | `ORG_CANNABIS_NURSERY_PROC` | `CANNABIS_NURSERY_AND_PROCESSING` | `false` | `null` | `cannabis.CannabisLot` — Indoor propagation, drying/curing, extraction ("moving the juice"), and CTLS vault. |
 
 ---
 

@@ -17,12 +17,16 @@ The hexagonal port (`getPolicyForOrg(organizationId)`) that loads versioned tari
 _Avoid_: Hardcoded constants, env config, global settings
 
 **Storage Location**:
-A scannable hierarchical physical slot (`Site -> Zone -> Container/Room -> Rack -> Shelf/Table -> Bin`) where a Vehicle, Part, or Cannabis Lot resides, governed by two data-driven columns: `allowedOrgType` (`SALVAGE_AND_EXPORT` vs. `CANNABIS_NURSERY_AND_PROCESSING`) and `maxActiveAssetCapacity` (seeded to `4` for the Kemptville Dismantling Pad, `8` for the Ramsayville Retail Lot, and `null` for standard shelf bins, enforced according to `locationCapacityGate.enforcementMode`: `HARD_BLOCK | WARN_ONLY | DISABLED`).
+A scannable hierarchical physical slot (`Site -> Zone -> Container/Room -> Rack -> Shelf/Table -> Bin`) where a Vehicle, Part, or Cannabis Lot resides, governed by three data-driven columns: `allowedOrgType` (`SALVAGE_AND_EXPORT` vs. `CANNABIS_NURSERY_AND_PROCESSING`), `allowsWholeVehicleDismantling` (`true` on Ramsayville sealed concrete, `false` on the Kemptville dry container warehouse per `O. Reg. 85/16`), and `maxActiveAssetCapacity` (`0` whole vehicles on the Kemptville Pad, `8` on the Ramsayville Shop/Lot, and `null` on shelf bins).
 _Avoid_: Bin, shelf, warehouse spot, address
 
-**Site Zoning (`RULE-ZONE-001`)**:
-The data-driven physical and regulatory boundary enforced by `StorageLocation.allowedOrgType` and `StorageLocation.maxActiveAssetCapacity` that partitions the 19-acre Kemptville property into the salvage container pad (`ZONE_CONTAINER_PAD`, `SALVAGE_AND_EXPORT`, max 4 shells) and the greenhouse/tree-farm agricultural zones (`ZONE_GREENHOUSE_AG`, `ZONE_TREE_FARM`, `CANNABIS_NURSERY_AND_PROCESSING`), rejecting cross-tenant scans with `422 SITE_ZONING_VIOLATION`.
+**Site Zoning & Zero-Fluid Farm Rule (`RULE-ZONE-001` & `RULE-ENV-001`)**:
+The data-driven physical and environmental boundary enforced by `StorageLocation.allowedOrgType` (always hard-blocking cross-tenant scans with `422 SITE_ZONING_VIOLATION`) and `StorageLocation.allowsWholeVehicleDismantling` (keeping Kemptville `ZONE_CONTAINER_PAD` strictly a dry clean-parts container warehouse under `O. Reg. 85/16`, appending `COMPLIANCE_WARNING_UNDRAINED_FARM` in `WARN_ONLY` mode if a whole `AUTOMOBILE` or undrained powertrain is scanned there).
 _Avoid_: Hardcoded site check, property split, yard section
+
+**Physical Custody Agility Mode (`complianceEnforcementMode`)**:
+The organization-level policy flag (`"WARN_ONLY" | "STRICT_BLOCK"`, defaulting to `"WARN_ONLY"` in Phase 1A) ensuring physical custody scans and lifecycle state transitions never throw blocking HTTP `422` errors when regulatory paperwork or timestamps lag—appending structured `complianceWarnings` (`COMPLIANCE_WARNING_UNDRAINED_FARM`, `MISSING_HTA_S60_DOCS`, `UNRECONCILED_CATALYTIC_CONVERTER`, `DRIVEON_SAFETY_CERT_WARNING`) for asynchronous CFO review while keeping PostgreSQL 100% aligned with physical yard truth.
+_Avoid_: Disabled validation, silent ignore, skipped compliance
 
 **Custody Event**:
 An immutable, idempotent (`idempotencyKey`), timestamped record of a physical `Vehicle`, `Part`, or `CannabisLot` (enforced by a single-target SQL `CHECK` constraint) being scanned into a new `StorageLocation` or `ShipmentPallet` by an operator, tracking optimistic concurrency (`expectedVersion` and `hasConflict`).
@@ -83,11 +87,19 @@ The explicit confirmation (`oemFitmentVerified = true`) that a `Part`'s stamped 
 _Avoid_: Universal fit, compatibility check, part match
 
 **Uncrushed Hulk**:
-A stripped donor `Vehicle` shell (`HULK_AWAITING_SCRAP`) remaining on the dismantling pad prior to being weighed and hauled away by a scrap metal recycler (`SCRAPPED_METAL_CLEARED`).
+A stripped donor `Vehicle` shell (`HULK_AWAITING_SCRAP`) at Ramsayville prior to being weighed and hauled away by a scrap metal recycler (`SCRAPPED_METAL_CLEARED`).
 _Avoid_: Carcass, shell, bare metal, scrap car
 
+**HTA Section 60 Garage & Wrecking Register**:
+The statutory Ontario *Highway Traffic Act* Section 60 intake record on `AUTOMOBILE` assets (`acquisitionSource`, `sellerFullName`, `sellerAddress`, `sellerPhotoIdStorageKey`, `ontarioPermitNumber`, `declaredStatutoryPurpose`) exposed as an inspectable register view (`?view=hta-s60-register`) and flagged with `MISSING_HTA_S60_DOCS` in `WARN_ONLY` mode when incomplete.
+_Avoid_: Seller note, purchase log, informal bill of sale
+
+**5-Stream Commodity Scrap Log (`ScrapComponentLog`)**:
+An immutable recycler payout record separating a dismantled donor `Vehicle`'s scrap recovery across `CATALYTIC_CONVERTER`, `ALUMINUM_ALLOY_WHEELS`, `COPPER_WIRING_HARNESS`, `ROTORS_AND_BATTERY`, and `BARE_STEEL_SHELL` (`$550–$900 CAD` floor), rolling up automatically into `Vehicle.scrapRecoveryCadMinor`, Stage 2 donor cost true-up, and `AvailableWorkingCapital_CAD`.
+_Avoid_: Mixed tin payout, lump scrap estimate, unlogged cat sale
+
 **Zero-Typing Domestic Syndication Bridge (`FR-MKT-00`)**:
-The deterministic Day-1 listing pipeline that joins decoded donor specs, part category, and condition grade into $\le 80$-character SEO eBay titles, eBay Seller Hub Bulk CSV feeds, and local classified ad payloads without manual typing.
+The deterministic Day-1 listing pipeline that joins decoded donor specs, part category, and condition grade into $\le 80$-character SEO eBay titles, eBay Seller Hub Bulk CSV feeds, Day-1 Ottawa/Gatineau B2B Mechanic Powertrain & Front-Clip Sheets (`exportB2bMechanicPowertrainSheet`, zero Solera Hollander licensing), and local classified ad payloads without manual typing.
 _Avoid_: Manual listing draft, ad scraper, CSV dump
 
 **Geolocation Bylaw Stealth (`RULE-MKT-002`)**:
@@ -170,13 +182,21 @@ _Avoid_: Wire transfer, FX trade, repatriation wire
 ## Unit Economics, Cash Custody & Compensation (`shared` & `salvage` Schemas)
 
 **Self-Funding Working Capital Pool (`AvailableWorkingCapital_CAD`)**:
-The self-sustaining capital pool initialized with a one-time seed investment (`initialSeedCapitalCadMinor`, configurable $\$20,000\text{–}\$50,000\text{ CAD}$, default $\$35,000\text{ CAD}$) and replenished strictly by realized domestic sales (`netRealizedCadMinor`) and repatriated export settlements (`SETTLED_ORIGIN_CORP_BANK`, when `countPendingExportCashAsAvailable = false`):
-$$\text{AvailableWorkingCapital}_{\text{CAD}} = \text{InitialSeedCapital}_{\text{CAD}} + \sum \text{NetRealizedDomesticSales}_{\text{CAD}} + \sum \text{RepatriatedExportSettlements}_{\text{CAD}} - \sum \text{TotalDeployedAcquisitionAndExpenseOutlay}_{\text{CAD}}$$
-Every new vehicle acquisition must leave at least `minCashReserveFloorCadMinor` ($\$7,500\text{ CAD}$) in liquid reserve for freight and customs (`AvailableWorkingCapital_CAD - EstimatedDealOutlay_CAD >= minCashReserveFloorCadMinor`), and founder salaries may never be drawn from `initialSeedCapitalCadMinor` (`RULE-PAY-002`).
+The self-sustaining capital pool backed by a 3-tranche `$44,000 CAD` Senior Secured Working Capital Loan Facility (`ActiveReleasedTrancheCapital_CAD`: `$22,000` Tranche 1 at launch, `$12,000` Tranche 2 at Day 60, `$10,000` Tranche 3 at Day 120) and replenished strictly by pre-HST realized domestic sales (`netRealizedCadMinor`), 5-stream scrap payouts (`ScrapComponentLog.payoutCadMinor`), and repatriated export settlements (`SETTLED_ORIGIN_CORP_BANK`), while excluding unsettled `ITA s. 78(1)` deferred inter-company accruals:
+$$\text{AvailableWorkingCapital}_{\text{CAD}} = \text{ActiveReleasedTrancheCapital}_{\text{CAD}} + \sum \text{NetRealizedDomesticSales}_{\text{CAD}} + \sum \text{ScrapComponentLog.payoutCadMinor} + \sum \text{RepatriatedExportSettlements}_{\text{CAD}} - \sum \text{CashDeployedAcquisitionsAndSettledExpenses}_{\text{CAD}}$$
+Every vehicle acquisition enforces `minCashReserveFloorCadMinor` ($\$7,500\text{ CAD}$), `maxDonorDismantleLandedCadMinor` ($\$3,200\text{ CAD}$), and `enableHighEndRebuildLane = false` (all supporting a **1-Tap `cfoOverride`** by `ARCHITECT_CFO`), while protecting loan principal and HST trust funds from founder draws (`RULE-PAY-002`).
 _Avoid_: Bi-monthly infusion, recurring investor top-up, slush fund
 
+**Deferred Inter-Company Lease Accrual (`ITA s. 78(1)`)**:
+A related-party container pad (`Small Roots Inc.`) or ERP/equipment (`Calgary IT HoldCo`) `Expense` flagged `isDeferredIntercompanyAccrual = true` (`accrualSettledAt = null`) that accrues on the GL balance sheet without reducing liquid buying power in `AvailableWorkingCapital_CAD` until settled in cash.
+_Avoid_: Forgiven rent, off-ledger lease, free yard use
+
+**Ontario HST Trust Ring-Fencing (`RULE-TAX-HST-01`)**:
+The tax accounting invariant (`isOntarioEntityHstRegistered = true`, `13%` rate) requiring `taxOrVatMinor` collected on `DOMESTIC_ORIGIN` sales to be isolated in a CRA HST Payable Trust liability counter and strictly excluded from `netRealizedCadMinor`, `AvailableWorkingCapital_CAD`, and `DistributableRealizedProfitPool_CAD`.
+_Avoid_: Tax-inclusive margin, spendable HST, gross revenue profit
+
 **Operator Float (`HELD_IN_OPERATOR_FLOAT`)**:
-Physical domestic cash collected from local sales (`LOCAL_WALK_IN_CASH`, `FB_MARKETPLACE_LOCAL`, `KIJIJI_LOCAL`) and held in the field operator's custody (e.g., Taz's Ontario Shop Float) as an auditable petty-cash subledger balance that can fund receipted/vouchered shop expenses (`paidFromCashCustody = 'HELD_IN_OPERATOR_FLOAT'`) or be swept to `SETTLED_ORIGIN_CORP_BANK` via `CashCustodyTransfer`.
+Physical domestic cash collected from local sales (`SaleTransaction.grossCollectedMinor`) and cash scrap recycler payouts (`ScrapComponentLog.payoutCadMinor`) held in the field operator's custody (e.g., Taz's Ontario Shop Float) as an auditable petty-cash subledger balance that can fund receipted/vouchered shop expenses (`paidFromCashCustody = 'HELD_IN_OPERATOR_FLOAT'`), offset partner draws (`RULE-PAY-003`), or be swept to `SETTLED_ORIGIN_CORP_BANK` via `CashCustodyTransfer`.
 _Avoid_: Shop cash, pocket cash, petty cash, local float
 
 **Two-Stage Pro-Rata Donor Cost Allocation**:
