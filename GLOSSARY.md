@@ -9,8 +9,8 @@ An independent legal business corporation (`OrganizationType`: `SALVAGE_AND_EXPO
 _Avoid_: Tenant, company, workspace, account, co-owned venture
 
 **Organization Membership**:
-The explicit per-corporation authorization binding (`OrganizationMembership`) between an authenticated `User` principal and an `Organization` that assigns the User's `UserRole` within that legal entity; common personnel across corporations are never assumed, and the header Organization Workspace Switcher renders only when a User holds active memberships in more than one `Organization`.
-_Avoid_: Team role, user tenant link, account access, assumed dual-partner access
+The explicit, revocable per-corporation authorization binding between an authenticated `User` principal and an `Organization` that assigns the User's role within that legal entity while active; deactivating a membership immediately revokes all access to that `Organization` while preserving historical audit trails, and the Organization Workspace Switcher renders only when a User holds active memberships in more than one `Organization`.
+_Avoid_: Team role, user tenant link, account access, assumed dual-partner access, global user role authorization
 
 **Policy Configuration Port (`IPolicyConfigPort`)**:
 The hexagonal port (`getPolicyForOrg(organizationId)`) that loads versioned tariff, FX, margin, compensation, self-funding working capital gate, tiered expense voucher, checkout negotiation corridor, site capacity, and cannabis mass-balance parameters from `src/core/config/pricing-policy.json` merged with any tenant-specific `Organization.policyConfigJson` overrides.
@@ -72,7 +72,7 @@ _Avoid_: Track, workflow, strategy, vehicle type
 **Orthogonal Part State Axes**:
 The five independent state dimensions governing a `Part` simultaneously without state-explosion:
 1. **`PartCustodyState` (Physical Custody):** `STRIPPED_RAW_OFFLINE`, `SHELVED_ORIGIN_CONTAINER`, `ON_EXPORT_PALLET`, `IN_TRANSIT_OCEAN_FREIGHT`, `CUSTOMS_HOLD_DESTINATION`, `SHELVED_DESTINATION_VAULT`, `SOLD_AND_RELEASED`, `RESTOCKED_QC_HOLD`, `SCRAPPED_OR_DAMAGED`.
-2. **`InventoryAvailabilityState` (Commercial Reservation/Sale):** `AVAILABLE`, `RESERVED_B2B_HOLD`, `COMMITTED_DOMESTIC_SALE`, `PENDING_VAULT_COD_PAYMENT`, `PAID_SETTLED`.
+2. **`InventoryAvailabilityState` (Commercial Reservation/Sale):** `AVAILABLE`, `RESERVED_B2B_HOLD`, `COMMITTED_DOMESTIC_SALE`, `PENDING_VAULT_COD_PAYMENT`, `PAID_SETTLED`, `RETURNED_QC_HOLD`.
 3. **`EbaySyncState` (eBay Motors Delist & Export Lock):** `NOT_LISTED`, `CSV_EXPORTED_PENDING_CONFIRMATION`, `SYNDICATED_LIVE`, `DELIST_PENDING`, `DELISTED`, `EXPORT_LOCK_PENDING`, `EXPORT_LOCK_CONFIRMED`.
 4. **`ClassifiedsSyncState` (Local Ottawa Classifieds Delist Queue):** `NOT_POSTED`, `POSTED_LIVE`, `DELIST_REQUIRED`, `DELISTED`.
 5. **`PartComplianceState` (Safety & Enrichment Readiness):** `PENDING_ENRICHMENT`, `NEEDS_HUMAN_REVIEW`, `CLEARED_FOR_SALE`, `QUARANTINED_RECALL_OR_DG`.
@@ -189,19 +189,21 @@ _Avoid_: Wire transfer, FX trade, repatriation wire
 
 ## Unit Economics, Cash Custody & Compensation (`shared` & `salvage` Schemas)
 
+**Payment & Bank Settlement Lifecycle**:
+The seven-stage financial settlement progression of a sale—`SALE_RECORDED`, `PAYMENT_INITIATED`, `PAYMENT_CONFIRMED`, `MARKETPLACE_PAYOUT_PENDING`, `BANK_SETTLEMENT_PENDING`, `BANK_SETTLEMENT_CONFIRMED`, and `REFUNDED_OR_CHARGED_BACK`—separating accrued accounting revenue, marketplace receivables, in-transit bank transfers, and physical operator float cash from confirmed corporate bank deposits.
+_Avoid_: Instant bank settlement on checkout, treating pending eBay payouts as cash, conflating e-Transfer screenshots with cleared bank funds
+
 **Self-Funding Working Capital Pool (`AvailableWorkingCapital_CAD`)**:
-The self-sustaining capital pool backed by a 3-tranche `$44,000 CAD` Senior Secured Working Capital Loan Facility (`ActiveReleasedTrancheCapital_CAD`: `$22,000` Tranche 1 at launch, `$12,000` Tranche 2 at Day 60, `$10,000` Tranche 3 at Day 120) and replenished strictly by pre-HST realized domestic sales (`netRealizedCadMinor`), 5-stream scrap payouts (`ScrapComponentLog.payoutCadMinor`), and repatriated export settlements (`SETTLED_ORIGIN_CORP_BANK`), while excluding unsettled `ITA s. 78(1)` deferred inter-company accruals:
-$$\text{AvailableWorkingCapital}_{\text{CAD}} = \text{ActiveReleasedTrancheCapital}_{\text{CAD}} + \sum \text{NetRealizedDomesticSales}_{\text{CAD}} + \sum \text{ScrapComponentLog.payoutCadMinor} + \sum \text{RepatriatedExportSettlements}_{\text{CAD}} - \sum \text{CashDeployedAcquisitionsAndSettledExpenses}_{\text{CAD}}$$
-Every vehicle acquisition enforces `minCashReserveFloorCadMinor` ($\$7,500\text{ CAD}$), `maxDonorDismantleLandedCadMinor` ($\$3,200\text{ CAD}$), and `enableHighEndRebuildLane = false` (all supporting a **1-Tap `cfoOverride`** by `ARCHITECT_CFO`), while protecting loan principal and HST trust funds from founder draws (`RULE-PAY-002`).
-_Avoid_: Bi-monthly infusion, recurring investor top-up, slush fund
+The deployable corporate-bank liquidity pool of `ORG_SALVAGE_EXPORT`, backed by released tranches of the `$44,000 CAD` Senior Secured Working Capital Loan Facility (`$22k / $12k / $10k`) plus bank-confirmed domestic sales (`BANK_SETTLEMENT_CONFIRMED` in `SETTLED_ORIGIN_CORP_BANK`), bank-settled 5-stream scrap payouts, bank-deposited `CashCustodyTransfer` sweeps from operator float, and repatriated export settlements, minus bank-deployed acquisitions/expenses and ring-fenced `NetHstTrustLiability_CAD`—strictly excluding pending marketplace payouts, unconfirmed e-Transfers, unswept physical operator cash, and unsettled `ITA s. 78(1)` accruals.
+_Avoid_: Bi-monthly infusion, anticipated payout liquidity, unconfirmed e-Transfer buying power, slush fund
 
 **Deferred Inter-Company Lease Accrual (`ITA s. 78(1)`)**:
-A container-pad rent or software/equipment lease `Expense` incurred within an `Organization`'s independent corporate books and flagged `isDeferredIntercompanyAccrual = true` (`accrualSettledAt = null`) that accrues on its GL balance sheet without reducing liquid buying power in `AvailableWorkingCapital_CAD` until settled in cash (subject to counterparty `ITA s. 78(1)` tax verification).
+A container-pad rent or software/equipment lease `Expense` incurred within an `Organization`'s independent corporate books and flagged as a deferred accrual that accrues on its general-ledger balance sheet without reducing deployable corporate-bank liquidity until settled in cash (subject to counterparty `ITA s. 78(1)` tax verification).
 _Avoid_: Forgiven rent, off-ledger lease, free yard use, cross-entity subsidy
 
-**Ontario HST Trust Ring-Fencing & eBay Billing Agent Split (`RULE-TAX-HST-01`)**:
-The channel-split tax accounting invariant (`isOntarioHstRegistered = true`, `13%` rate): on `EBAY_MOTORS_SHIPPED`, eBay collects and remits 100% of buyer GST/HST directly to the CRA as Billing Agent (`buyerTaxRemittedByPlatformMinor`, adding `0` to corporate `taxOrVatMinor`) while 13% HST charged on eBay seller fees is tracked as recoverable Input Tax Credit (`itcReceivableCadMinor`); on direct and local classified channels, 13% HST (`taxOrVatMinor`) is collected directly and `netHstTrustLiability = max(0, hstCollectedDirect - verifiedItcReceivable)` is strictly ring-fenced out of `AvailableWorkingCapital_CAD` and `DistributableRealizedProfitPool_CAD`.
-_Avoid_: Double-remitting eBay buyer HST, tax-inclusive margin, spendable HST
+**Jurisdiction-Aware GST/HST & eBay Billing Agent Accounting (`RULE-TAX-HST-01`)**:
+The destination- and channel-aware Canadian sales-tax rule: on eBay Canada (`MARKETPLACE_FACILITATOR_COLLECTED`), eBay collects and remits buyer tax directly and authoritative platform-reported buyer tax is recorded for audit visibility only (`0` added to corporate tax liability, while seller-fee GST/HST becomes a verified Input Tax Credit only upon tax-invoice verification); on direct sales (`DIRECT_SELLER_COLLECTED`), GST/HST is assessed by CRA place of supply (`13%` Ontario HST on in-Ontario pickups/deliveries, destination-province GST/HST rates on Canadian shipments, or `0%` on documented international exports) and net direct GST/HST trust liability is ring-fenced out of working capital and profit draws.
+_Avoid_: Blanket 13% tax on out-of-province shipments, fabricated eBay buyer tax, unverified fee ITCs, spendable GST/HST
 
 **Operator Float (`HELD_IN_OPERATOR_FLOAT`)**:
 Physical domestic cash collected within `ORG_SALVAGE_EXPORT` from local sales (`SaleTransaction.grossCollectedMinor`) and cash scrap recycler payouts (`ScrapComponentLog.payoutCadMinor`) held in the salvage field operator's custody as an auditable petty-cash subledger balance that can fund receipted/vouchered shop expenses (`paidFromCashCustody = 'HELD_IN_OPERATOR_FLOAT'`), offset partner draws (`RULE-PAY-003`), or be swept to `SETTLED_ORIGIN_CORP_BANK` via `CashCustodyTransfer`.
@@ -232,16 +234,16 @@ A traceable biological, cured, or extracted inventory unit (`LOT-YYYY-XXXX`) tra
 _Avoid_: Batch, plant group, harvest lot, SKU
 
 **Production Run (`ProductionRun`)**:
-A multi-input, multi-output (`ProductionRunInput` / `ProductionRunOutput`) curing, solventless ice-water hash, rosin pressing, infused pre-roll, or packaging batch transformation ("moving the juice", `FR-CAN-02`) where total input tenth-grams strictly equal output yield plus process loss, destroyed byproduct, and unaccounted variance.
-_Avoid_: 1:1 lot transformation, single-output batch, processing step
+A lifecycle-governed (`DRAFT`, `IN_PROGRESS`, `FINALIZED`, `VOIDED`) multi-input, multi-output curing, solventless ice-water hash, rosin pressing, infused pre-roll, or packaging batch transformation where finalization atomically verifies child input/output sums and exact tenth-gram mass conservation, after which the run is immutable and correctable only via auditable compensating reversals.
+_Avoid_: 1:1 lot transformation, single-output batch, mutable finalized run
 
 **Canonical Inventory Event (`CanonicalInventoryEvent`)**:
-An append-only regulatory ledger record capturing signed tenth-gram mass (`netMassTenthGrams`), flowering vs. non-flowering mass (`flowerMassTenthGrams`, `nonFlowerMassTenthGrams`), discrete units, and Total THC (`totalThcMg`) to reconcile both Health Canada CTLS kilogram reports and CRA Form B300 excise duty returns (`$1.00/g` flowering, `$0.30/g` non-flowering, and extract mg-THC duty).
-_Avoid_: Mutable lot balance, floating-point weight log
+An append-only, idempotent regulatory ledger record capturing signed tenth-gram mass, flowering vs. non-flowering mass, discrete units, Total THC, and optional reversal linkage to reconcile Health Canada CTLS kilogram reports, CRA Form B300 excise duty returns, and post-finalization compensating adjustments.
+_Avoid_: Mutable lot balance, floating-point weight log, silent history edit
 
 **Unaccounted Variance (`RULE-CAN-001`)**:
-The residual tenth-gram difference in a `ProductionRun` after subtracting output yield, process loss, and destroyed byproduct from total input mass, triggering an automatic QAP variance review and `complianceHold = true` if $|\text{UnaccountedVariance}| / \text{TotalInputMass} > 2.0\%$.
-_Avoid_: Shrinkage, processing loss, yield gap
+The signed residual tenth-gram difference in a `ProductionRun` after subtracting output yield, process loss, and destroyed byproduct from total input mass; exceeding the internal `2.0%` QAP control threshold (an internal quality gate, never a statutory Health Canada shrinkage allowance) requires `requiresQapVarianceReview` and either output-lot compliance holds or documented QAP sign-off at finalization.
+_Avoid_: Statutory shrinkage allowance, unlogged processing loss, silent yield gap
 
 **Compliance Hold**:
 A regulatory lock (`complianceHold = true`) placed on a `CannabisLot` when `UnaccountedVariance` exceeds $2.0\%$, a mandatory 60-day extract NNCP (`nncpNoticeId`) or s. 88.94 Preventive Control Plan check is incomplete, or a Lab Certificate of Analysis (`labCoaStorageKey` in `R2_PRIVATE_EVIDENCE_BUCKET`) is missing, blocking transfer or release until `CANNABIS_QAP_COMPLIANCE` sign-off.

@@ -1,6 +1,6 @@
 # Prisma/Supavisor Transaction-Local RLS Hardening, eBay GST/HST Billing Agent Split & Post-2025 Cannabis DDL
 
-Status: Accepted (Refines database RLS, marketplace tax/compliance, and dormant Phase 2B cannabis DDL baselines established in `ADR-0001`–`ADR-0004`)
+Status: Accepted (Refines database RLS, marketplace tax/compliance, and dormant Phase 2B cannabis DDL baselines established in `ADR-0001`–`ADR-0004`; specific `shared.User` RLS, `OrganizationMembership.isActive`, `tx.$queryRaw` transaction wrapper, settlement-liquidity separation, jurisdiction-aware GST/HST, trigger-based `ProductionRun` finalization, and fail-closed CI verification clauses amended by [`ADR-0006`](./0006-identity-rls-settlement-liquidity-jurisdiction-tax-and-run-finalization.md))
 
 Following five technical and statutory verification audits across PostgreSQL/Supavisor multi-tenancy, CRA GST/HST marketplace tax law, eBay Motors Canada syndication policies, Ontario `O. Reg. 85/16` / TDG dangerous-goods shipping rules, and the March/April 2025 federal *Cannabis Regulations* amendments (`SOR/2025-43` and `SOR/2025-45`), we adopt three hardening refinements while preserving our 10-issue Phase 1A execution backlog and `ADR-0003` `"WARN_ONLY"` physical-custody agility:
 
