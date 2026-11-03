@@ -174,6 +174,63 @@ Phase 1A launches **`ORG_SALVAGE_EXPORT`'s Ontario salvage operations centered a
   3. Checks **Deal Discipline Caps (`dealDisciplineGate`)** and the **3-Tranche `$44,000 CAD` Senior Secured Working Capital Pool (`workingCapitalGate`):** Verifies `EstimatedDealOutlay_CAD <= maxDonorDismantleLandedCadMinor` (`$3,200 CAD` on `DISMANTLE_AND_EXPORT`), enforces the Year-1 `HIGH_END_REBUILD` pause (`enableHighEndRebuildLane == false`), and evaluates settlement-confirmed $\text{AvailableWorkingCapital}_{\text{CAD}} = \text{ConfirmedCorpBankCash}_{\text{CAD}} - \text{NetHstTrustLiability}_{\text{CAD}}$ (`$22,000 CAD` Tranche 1 active at launch, strictly excluding `MARKETPLACE_PAYOUT_PENDING`, `BANK_SETTLEMENT_PENDING`, unswept `HELD_IN_OPERATOR_FLOAT`, and unsettled `isDeferredIntercompanyAccrual` rows) against `minCashReserveFloorCadMinor` ($\$7,500\text{ CAD}$).
   4. **1-Tap `cfoOverride`:** Blocks moving a deal to `ACQUIRED_IN_TRANSIT` if the bid exceeds $B_{\text{max}}$ or breaches any capital, donor-cap, lane-pause, or capacity gate unless an audit-logged **1-Tap `cfoOverride`** (`ARCHITECT_CFO`) is supplied (`FR-DEAL-02`).
 
+##### Pre-Bid Market Demand Validation & Sold-Comparable Evidence (Phase 1B)
+* **Scope Note:** This subsection defines **Phase 1B** product requirements for evidence-based donor acquisition underwriting. Detailed technical architecture, mathematical underwriting formulas, external data integrations, and implementation tickets are deferred until Phase 1B planning and do not alter Phase 1A scope or Issues `#1`–`#10`.
+* **Functional Requirements:**
+  1. **Component-Level Demand Assessment:**
+     * Before approving a donor vehicle acquisition, the system must support evaluating market demand for high-value recoverable components rather than relying solely on theoretical part values.
+     * Initial target components include:
+       * Engine Control Module (ECM/ECU).
+       * ABS pump/control module.
+       * Infotainment display/head unit.
+       * Left and right headlights.
+       * Left and right taillights.
+     * The target component list must be configurable and extensible for other valuable assemblies, including transmissions, transfer cases, differentials, and marine components.
+     * Component identification must account for OEM part numbers, compatible vehicles, trim, engine, generation, and relevant interchange restrictions.
+  2. **Sold-Comparable Market Evidence:**
+     * For each assessed component, the system must support recording:
+       * Relevant sold-comparable prices, preferably from the preceding 90 days.
+       * Number of comparable units sold.
+       * Estimated 90-day sell-through rate, when reliably available.
+       * Active competing listing count and pricing.
+       * Evidence source and research timestamp.
+       * Fitment and comparability confidence.
+       * Insufficient or unavailable market data indicators.
+     * The system must strictly differentiate actual completed sales from active asking prices and must never fabricate historical sales volumes or sell-through metrics from active listings alone.
+  3. **Risk-Adjusted Acquisition Evaluation:**
+     * The Deal Analyzer must evaluate:
+       * Conservative component resale value.
+       * Likelihood of recovering each component in saleable condition.
+       * Expected time to sale.
+       * Marketplace fees and selling costs.
+       * Stripping, testing, and handling expenses.
+       * Expected near-term cash recovery.
+       * Expected longer-term inventory realization.
+       * Scrap recovery as a downside consideration.
+     * Acquisition decisions must prioritize cash recovery within the existing **14–21-day** operational target rather than theoretical total inventory value over 90 days, while maintaining full compatibility with existing `FR-DEAL-01` maximum allowable bid ($B_{\text{max}}$), working-capital reserve (`workingCapitalGate`), donor landed-cost cap (`dealDisciplineGate`), physical capacity, and `ARCHITECT_CFO` override (`FR-DEAL-02`) requirements. *(The exact mathematical underwriting formula is deferred to Phase 1B technical specification.)*
+  4. **Configurable Demand Thresholds:**
+     * A 90-day sell-through rate above `50%` may be used as a configurable positive demand signal; however, the system must:
+       * Not require every evaluated component to exceed `50%`.
+       * Not automatically reject attractive low-volume, high-margin components.
+       * Account for sample size and evidence reliability.
+       * Permit components with insufficient data to be assessed conservatively.
+       * Allow audited `ARCHITECT_CFO` overrides (`cfoOverride`) where appropriate.
+     * The final acquisition decision must be governed by overall risk-adjusted economics and liquidity constraints rather than a single arbitrary threshold.
+  5. **Data Acquisition Strategy:**
+     * Initial Phase 1B delivery may rely on manually researched and entered eBay Product Research (formerly Terapeak) observations.
+     * Automated sold-comparable ingestion remains conditional upon legitimate data-provider access; the system must not assume that eBay's restricted `Marketplace Insights API` is publicly available to new developers.
+     * eBay `Browse API` active-listing data may support competitor supply and asking-price analysis, but must never be treated as equivalent to completed-sale history.
+     * The design must preserve the ability to incorporate authorized external data sources or internal realized sales history in later phases.
+  6. **Acquisition Decision Evidence:**
+     * The Deal Analyzer must retain sufficient structured evidence to explain why a donor acquisition was approved or rejected, including:
+       * Vehicle identity.
+       * Assessed components.
+       * Market evidence and observation dates.
+       * Estimated recoverable value.
+       * Demand and uncertainty indicators.
+       * Recommended maximum landed acquisition cost.
+       * Approval, rejection, or override rationale, consistent with existing auditability requirements and `ARCHITECT_CFO` permissions.
+
 #### FR-LOG-01: Pre-Paid LCL Pallet & Whole-Asset Consolidation Scan
 * **Description:** When an overseas buyer pre-purchases whole watercraft/equipment (e.g., Yamaha Jet, Yamaha VR, A/C Machine) or a `UNIVERSAL` parts pallet, operators create an outbound `Shipment` (e.g., `EXP-2026-TT-001`) and `ShipmentPallet` (`PLT-2026-001`) and scan items onto the pallet.
 * **Business Rules:**
