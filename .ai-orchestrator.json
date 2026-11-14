@@ -1,6 +1,11 @@
 {
   "validation": {
-    "commands": ["pnpm typecheck", "pnpm verify:no-stubs"],
+    "commands": [
+      "pnpm db:generate",
+      "pnpm typecheck",
+      "pnpm verify:no-stubs",
+      "pnpm test"
+    ],
     "timeout": 600,
     "narrowByChangedFiles": false
   }
