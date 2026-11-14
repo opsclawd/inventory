@@ -1,0 +1,14 @@
+{
+  "runUuid": "85bf2d4f-2cbd-4c1f-83cb-a9cfee3be041",
+  "phase": "validate",
+  "kind": "validation_failed",
+  "message": "1 validation command(s) failed: test (⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯). See validate/ logs.",
+  "canRetry": true,
+  "suggestedAction": "Open the validate phase logs and rerun the failing command(s) locally.",
+  "artifacts": [
+    "validate/3-test.stdout.log",
+    "validate/3-test.stderr.log",
+    "validate/validation-result.json"
+  ],
+  "detectedAt": "2026-11-14T06:51:24.893Z"
+}

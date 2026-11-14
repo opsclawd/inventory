@@ -1,0 +1,181 @@
+{
+  "metadata": {
+    "verificationStatus": "ESTIMATE",
+    "effectiveDate": "2026-11-01",
+    "source": "ADR-0006 Identity RLS, Settlement Liquidity, Jurisdiction-Aware GST/HST & Trigger-Gated ProductionRun Finalization",
+    "approvedBy": "ARCHITECT_CFO"
+  },
+  "fxRates": {
+    "cadToUsdSpot": 0.73,
+    "usdToTtdOfficialCustoms": 6.78297,
+    "usdToTtdShadowRepatriation": 7.35
+  },
+  "trinidadImportTax": {
+    "isTrinidadEntityVatRegistered": false,
+    "defaultAutoPartsDutyRate": 0.30,
+    "customsProcessingFeeRate": 0.03,
+    "vatRate": 0.125
+  },
+  "oceanFreight": {
+    "allocatedLclFreightUsdPerKg": 1.85,
+    "marineInsuranceRateOfFob": 0.015
+  },
+  "marginsAndCommissions": {
+    "targetExportMarkupOnCost": 0.65,
+    "defaultBrokerCommissionRate": 0.10,
+    "minBeaterNetProfitCadMinor": 150000,
+    "minRebuildNetProfitCadMinor": 700000,
+    "minPartOutRoiMultiplier": 2.0
+  },
+  "domesticTaxPolicy": {
+    "isGstHstRegistered": true,
+    "isOntarioEntityHstRegistered": true,
+    "isOntarioHstRegistered": true,
+    "isOmvicLicensed": false,
+    "ontarioHstRate": 0.13,
+    "canadianProvincialGstHstRatesBps": {
+      "ON": 1300,
+      "NS": 1400,
+      "NB": 1500,
+      "NL": 1500,
+      "PE": 1500,
+      "QC": 500,
+      "BC": 500,
+      "AB": 500,
+      "MB": 500,
+      "SK": 500,
+      "YT": 500,
+      "NT": 500,
+      "NU": 500
+    },
+    "provincialPstRegistrations": {
+      "QC": { "registered": false, "rate": 0.09975 },
+      "BC": { "registered": false, "rate": 0.07 },
+      "SK": { "registered": false, "rate": 0.06 },
+      "MB": { "registered": false, "rate": 0.07 }
+    },
+    "requireVerifiedTaxInvoiceForFeeItc": true,
+    "publicPickupCityLabel": "Ottawa South / Hwy 416 Corridor"
+  },
+  "domesticChannelFees": {
+    "LOCAL_WALK_IN_CASH": 0.0,
+    "FB_MARKETPLACE_LOCAL": 0.0,
+    "KIJIJI_LOCAL": 0.0,
+    "RETAIL_LOT_VEHICLE_SALE": 0.0,
+    "WHOLESALE_MECHANIC_NETWORK": 0.0,
+    "EBAY_MOTORS_SHIPPED": 0.1325,
+    "CAR_PART_WHOLESALE": 0.0
+  },
+  "araGradeMultipliers": {
+    "GRADE_A": 1.05,
+    "GRADE_B1": 1.00,
+    "GRADE_B2": 0.95,
+    "GRADE_B3": 0.85,
+    "GRADE_C": 0.70,
+    "GRADE_X": 0.80
+  },
+  "complianceThresholds": {
+    "trinidadFiuCddThresholdTtdMinor": 5000000,
+    "trinidadFiuLargeCashReportTtdMinor": 9000000,
+    "trinidadDepositInsuranceCapTtdMinor": 20000000,
+    "trinidadDepositAlertThresholdTtdMinor": 18000000,
+    "cbsaCersValueThresholdCadMinor": 200000,
+    "cbsaMarineCutoffHours": 48,
+    "driveOnReinspectionWindowDays": 10,
+    "safetyStandardsCertMaxDays": 36,
+    "easrRegistrationNumber": null,
+    "easrActiveElvThreshold": 2,
+    "minRecordRetentionYears": 7
+  },
+  "operationalGates": {
+    "complianceEnforcementMode": "WARN_ONLY",
+    "workingCapitalGate": {
+      "enabled": true,
+      "enforcementMode": "HARD_BLOCK",
+      "totalCommittedLoanFacilityCadMinor": 4400000,
+      "initialSeedCapitalCadMinor": 2200000,
+      "minCashReserveFloorCadMinor": 750000,
+      "countPendingExportCashAsAvailable": false,
+      "countPendingDomesticReceivablesAsAvailable": false,
+      "countOperatorFloatInBankWorkingCapital": false,
+      "tranches": [
+        {
+          "trancheCode": "TRANCHE_1_LAUNCH",
+          "principalCadMinor": 2200000,
+          "unlocked": true
+        },
+        {
+          "trancheCode": "TRANCHE_2_DAY_60",
+          "principalCadMinor": 1200000,
+          "unlocked": false,
+          "minShelvedSkus": 120,
+          "minScrappedDonors": 3
+        },
+        {
+          "trancheCode": "TRANCHE_3_DAY_120",
+          "principalCadMinor": 1000000,
+          "unlocked": false,
+          "minShelvedSkus": 400,
+          "minScrappedDonors": 8,
+          "requireZeroOverdueFloatReceipts": true
+        }
+      ]
+    },
+    "dealDisciplineGate": {
+      "maxDonorDismantleLandedCadMinor": 320000,
+      "enableHighEndRebuildLane": false
+    },
+    "locationCapacityGate": {
+      "enforcementMode": "HARD_BLOCK"
+    }
+  },
+  "expensePolicy": {
+    "pettyCashVoucherMaxCadMinor": 5000,
+    "monthlyUnreceiptedVoucherCapCadMinor": 25000
+  },
+  "checkoutPolicy": {
+    "checkoutStrictnessMode": "BONDED_VAULT_STRICT",
+    "vaultAdminDiscountToleranceBps": 800,
+    "vaultAdminSmallRoundingAllowanceTtdMinor": 10000,
+    "vaultAdminMaxDiscountCapTtdMinor": 75000,
+    "domesticAdminDiscountToleranceBps": 1000
+  },
+  "exportPolicy": {
+    "exportFulfillmentMode": "PREPAID_ORIGIN_ONLY",
+    "requireFullPrepaymentBeforeShipmentSeal": true
+  },
+  "domesticSyndication": {
+    "publicPickupLocationLabel": "Ottawa South / Hwy 416 Corridor",
+    "ebayShipFromCity": "Kemptville, ON",
+    "ebayShipFromPostalCode": "K0G 1J0",
+    "heavyLocalOnlyThresholdKg": 15.0,
+    "ebaySiteId": "Canada",
+    "ebayCurrency": "CAD"
+  },
+  "siteZoningLimits": {
+    "kemptvilleMaxUncrushedShellsOnPad": 4,
+    "kemptvilleContainerCount": 4,
+    "ramsayvilleMaxActiveShopVehicles": 8
+  },
+  "compensationRules": {
+    "stripperPieceRatePerVehicleCadMinor": 35000,
+    "minShelvedPartsForStripPayout": 35,
+    "allowFounderDrawFromSeedCapital": false,
+    "autoOffsetHunterDrawAgainstFloat": true
+  },
+  "cannabisCompliance": {
+    "microCultivationMaxCanopySqm": 800,
+    "microProcessingAnnualDriedEquivMaxKg": 2400,
+    "extractNonDiscreteContainerMaxThcMg": 1000,
+    "requireSecondWitnessForExciseStampedDestruction": false,
+    "minRecordRetentionYears": 7,
+    "adverseReactionRetentionYears": 25,
+    "wetToDryMoistureLossMinPct": 0.72,
+    "wetToDryMoistureLossMaxPct": 0.80,
+    "biomassToCrudeExtractYieldMinPct": 0.10,
+    "biomassToCrudeExtractYieldMaxPct": 0.25,
+    "crudeToDistillateRefinementYieldMinPct": 0.65,
+    "crudeToDistillateRefinementYieldMaxPct": 0.88,
+    "maxUnaccountedVarianceAlertPct": 0.02
+  }
+}
