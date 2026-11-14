@@ -1,0 +1,8 @@
+.ai-runs/
+.ai-worktrees/
+.ai-tmp/
+node_modules/
+.env
+.env.local
+.next/
+dist/

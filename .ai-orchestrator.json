@@ -1,0 +1,7 @@
+{
+  "validation": {
+    "commands": ["pnpm typecheck", "pnpm verify:no-stubs"],
+    "timeout": 600,
+    "narrowByChangedFiles": false
+  }
+}
