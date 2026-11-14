@@ -11,7 +11,12 @@
     "test": "vitest run",
     "test:db:rls": "VITEST_INCLUDE_RLS=1 vitest run src/infrastructure/db/__tests__/rls.integration.test.ts",
     "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate deploy",
+    "db:seed": "tsx prisma/seed.ts",
     "verify:no-stubs": "node scripts/verify-no-stubs.mjs"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
     "@prisma/client": "6.19.3",
@@ -27,6 +32,7 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "prisma": "6.19.3",
+    "tsx": "4.23.15",
     "typescript": "^5.8.0",
     "vitest": "^3.2.4"
   }

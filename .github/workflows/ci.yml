@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  offline-checks:
+    name: Typecheck, No-Stubs & Offline Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.3
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client and validate schema
+        env:
+          DATABASE_URL: postgresql://erp_app_user:ci_dummy_pw@localhost:6543/salvage_erp_test?pgbouncer=true
+          DIRECT_URL: postgresql://postgres:ci_dummy_pw@localhost:5432/salvage_erp_test
+        run: |
+          pnpm db:generate
+          pnpm exec prisma validate
+
+      - name: TypeScript typecheck
+        run: pnpm typecheck
+
+      - name: Fail-closed no-stubs & unsafe SQL gate
+        run: pnpm verify:no-stubs
+
+      - name: Run offline unit & manifest tests
+        run: pnpm test
+
+  postgres-rls-integration:
+    name: PostgreSQL 16 erp_app_user FORCE RLS & Seed Integration
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: salvage_erp_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d salvage_erp_test"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      DIRECT_URL: postgresql://postgres:postgres@localhost:5432/salvage_erp_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.3
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm db:generate
+
+      - name: Deploy migrations via DIRECT_URL owner
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/salvage_erp_test
+        run: pnpm db:migrate
+
+      - name: Configure erp_app_user runtime password for integration tests
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d salvage_erp_test -v ON_ERROR_STOP=1 -c "ALTER ROLE erp_app_user WITH PASSWORD 'erp_app_test_pw';"
+
+      - name: Run Phase 1A seed twice (idempotency verification)
+        env:
+          DATABASE_URL: postgresql://erp_app_user:erp_app_test_pw@localhost:5432/salvage_erp_test?pgbouncer=true
+        run: |
+          pnpm db:seed
+          pnpm db:seed
+
+      - name: Run PostgreSQL erp_app_user FORCE RLS integration suite
+        env:
+          DATABASE_URL: postgresql://erp_app_user:erp_app_test_pw@localhost:5432/salvage_erp_test?pgbouncer=true
+          TEST_DATABASE_URL: postgresql://erp_app_user:erp_app_test_pw@localhost:5432/salvage_erp_test?pgbouncer=true
+        run: pnpm test:db:rls
