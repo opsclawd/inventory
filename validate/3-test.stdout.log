@@ -1,0 +1,17 @@
+
+> inventory@0.0.0 test /home/gary/.openclaw/workspace/inventory/.ai-worktrees/issue-1
+> vitest run
+
+
+ RUN  v3.2.7 /home/gary/.openclaw/workspace/inventory/.ai-worktrees/issue-1
+
+ ✓ src/core/config/__tests__/policy-loader.test.ts (14 tests) 1436ms
+   ✓ verify-no-stubs.mjs fail-closed verification > passes on the real repository via CLI execution  722ms
+   ✓ verify-no-stubs.mjs fail-closed verification > passes on a clean fixture containing safe parameterized $queryRaw set_config and unrelated $executeRaw  567ms
+
+ Test Files  1 failed | 1 passed (2)
+      Tests  14 passed (14)
+   Start at  23:51:20
+   Duration  2.29s (transform 401ms, setup 0ms, collect 383ms, tests 1.44s, environment 0ms, prepare 236ms)
+
+ ELIFECYCLE  Test failed. See above for more details.

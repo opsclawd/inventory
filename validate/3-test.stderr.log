@@ -1,0 +1,18 @@
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/infrastructure/db/__tests__/prisma.test.ts [ src/infrastructure/db/__tests__/prisma.test.ts ]
+PrismaRuntimeConfigError: DATABASE_URL is required for runtime Prisma client initialization.
+ ❯ validateRuntimeDatabaseUrl src/infrastructure/db/prisma.ts:55:11
+     53| ): string {
+     54|   if (typeof databaseUrl !== 'string' || databaseUrl.trim().length ===…
+     55|     throw new PrismaRuntimeConfigError(
+       |           ^
+     56|       'DATABASE_URL is required for runtime Prisma client initializati…
+     57|     );
+ ❯ createPrismaClient src/infrastructure/db/prisma.ts:111:23
+ ❯ getOrCreateSingletonPrismaClient src/infrastructure/db/prisma.ts:128:18
+ ❯ src/infrastructure/db/prisma.ts:137:37
+ ❯ src/infrastructure/db/__tests__/prisma.test.ts:3:1
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
