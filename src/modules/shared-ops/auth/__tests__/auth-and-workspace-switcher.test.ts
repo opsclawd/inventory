@@ -1915,7 +1915,6 @@ describe.runIf(HAS_TEST_DATABASE_URL)(
 
     const createdUserIds: string[] = [];
     const createdMembershipIds: string[] = [];
-    const createdAuditIds: string[] = [];
 
     beforeAll(async () => {
       const testUrl = requireEnvUrl('TEST_DATABASE_URL');
@@ -1940,12 +1939,6 @@ describe.runIf(HAS_TEST_DATABASE_URL)(
 
     afterAll(async () => {
       if (ownerPrisma) {
-        if (createdAuditIds.length > 0) {
-          await ownerPrisma.$executeRaw`
-            DELETE FROM "shared"."AuditLog"
-            WHERE "id" = ANY(${createdAuditIds}::uuid[])
-          `;
-        }
         if (createdMembershipIds.length > 0) {
           await ownerPrisma.$executeRaw`
             DELETE FROM "shared"."OrganizationMembership"
@@ -1954,8 +1947,12 @@ describe.runIf(HAS_TEST_DATABASE_URL)(
         }
         if (createdUserIds.length > 0) {
           await ownerPrisma.$executeRaw`
-            DELETE FROM "shared"."User"
-            WHERE "id" = ANY(${createdUserIds}::uuid[])
+            DELETE FROM "shared"."User" u
+            WHERE u."id" = ANY(${createdUserIds}::uuid[])
+              AND NOT EXISTS (
+                SELECT 1 FROM "shared"."AuditLog" a
+                WHERE a."actorUserId" = u."id"
+              )
           `;
         }
       }
@@ -2134,7 +2131,6 @@ describe.runIf(HAS_TEST_DATABASE_URL)(
 
       // CFO deactivates stripper
       const auditId1 = randomUUID();
-      createdAuditIds.push(auditId1);
       const deactivated = await deactivateOrganizationMembership(
         cfoSession,
         stripperFixture.membershipId,
@@ -2173,7 +2169,6 @@ describe.runIf(HAS_TEST_DATABASE_URL)(
         { repository: repo },
       );
       const switchAuditId = randomUUID();
-      createdAuditIds.push(switchAuditId);
       const switchedHunter = await switchOrganizationWorkspace(
         hunterSalvageSession,
         PHASE1A_SEED_IDS.orgs.ORG_CANNABIS_NURSERY_PROC,
@@ -2196,7 +2191,6 @@ describe.runIf(HAS_TEST_DATABASE_URL)(
 
       // Reactivate stripper and prove historical row ID is preserved and access restored
       const auditId2 = randomUUID();
-      createdAuditIds.push(auditId2);
       const reactivated = await reactivateOrganizationMembership(
         cfoSession,
         stripperFixture.membershipId,
@@ -2264,7 +2258,6 @@ describe.runIf(HAS_TEST_DATABASE_URL)(
         // Concurrent mutual deactivation race: at most 1 commits; the other fails and >= 1 CFO remains
         const raceAudit1 = randomUUID();
         const raceAudit2 = randomUUID();
-        createdAuditIds.push(raceAudit1, raceAudit2);
 
         const [res1, res2] = await Promise.allSettled([
           deactivateOrganizationMembership(
@@ -2340,7 +2333,6 @@ describe.runIf(HAS_TEST_DATABASE_URL)(
             },
           });
         const reactivateAuditId = randomUUID();
-        createdAuditIds.push(reactivateAuditId);
         await reactivateOrganizationMembership(
           survivorSession,
           deactivatedMembership.id,
@@ -2348,7 +2340,6 @@ describe.runIf(HAS_TEST_DATABASE_URL)(
         );
 
         const selfRevokeAuditId = randomUUID();
-        createdAuditIds.push(selfRevokeAuditId);
         const selfRevoked = await deactivateOrganizationMembership(
           survivorSession,
           survivorMembership.id,
@@ -2409,16 +2400,8 @@ describe.runIf(HAS_TEST_DATABASE_URL)(
         ).toBe(false);
       } finally {
         await ownerPrisma.$executeRaw`
-          DELETE FROM "shared"."AuditLog"
-          WHERE "organizationId" = ${isolatedOrgId}::uuid
-        `;
-        await ownerPrisma.$executeRaw`
           DELETE FROM "shared"."OrganizationMembership"
           WHERE "organizationId" = ${isolatedOrgId}::uuid
-        `;
-        await ownerPrisma.$executeRaw`
-          DELETE FROM "shared"."Organization"
-          WHERE "id" = ${isolatedOrgId}::uuid
         `;
       }
     });
