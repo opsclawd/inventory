@@ -104,3 +104,9 @@ jobs:
           DATABASE_URL: postgresql://erp_app_user:erp_app_test_pw@localhost:5432/salvage_erp_test?pgbouncer=true
           TEST_DATABASE_URL: postgresql://erp_app_user:erp_app_test_pw@localhost:5432/salvage_erp_test?pgbouncer=true
         run: pnpm test:db:rls
+
+      - name: Run PostgreSQL auth & membership lifecycle integration suite
+        env:
+          DATABASE_URL: postgresql://erp_app_user:erp_app_test_pw@localhost:5432/salvage_erp_test?pgbouncer=true
+          TEST_DATABASE_URL: postgresql://erp_app_user:erp_app_test_pw@localhost:5432/salvage_erp_test?pgbouncer=true
+        run: pnpm vitest run src/modules/shared-ops/auth
