@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  computeDetailedTaxCounters,
   computeNetHstTrustLiabilityCadMinor,
   computeSeparatedFinancialSnapshot,
   evaluatePartnerProfitDraw,
@@ -1467,8 +1468,25 @@ describe('3-Rule Compensation Protocol (RULE-PAY-001 to RULE-PAY-003)', () => {
         },
       ],
     });
-    // Profit pool is 800,000, bank is 800,000, reserve floor is 750,000 -> bank draw max = 50,000
-    const reserveLockedDraw = evaluatePartnerProfitDraw(
+    // Profit pool is 800,000, bank is 800,000, reserve floor is 750,000 -> bank draw max without override = 50,000
+    const reserveBlockedWithoutOverride = evaluatePartnerProfitDraw(
+      {
+        organizationId: ORG_SALVAGE,
+        targetUserId: 'cfo-1',
+        targetUserRole: 'ARCHITECT_CFO',
+        requestedDrawCadMinor: 50_001,
+        snapshotInput: lowBankReserveInput,
+        actor: { actorUserId: 'cfo-1', actorRole: 'ARCHITECT_CFO' },
+      },
+      policy,
+    );
+    expect(reserveBlockedWithoutOverride.allowed).toBe(false);
+    expect(reserveBlockedWithoutOverride.blockingCodes).toContain(
+      'INSUFFICIENT_LIQUID_RESERVE_CAPACITY',
+    );
+
+    // Valid authenticated CFO override with nonblank reason waives ONLY the reserve-floor gate (up to availableWorkingCapitalCadMinor)
+    const reserveOverrideAllowed = evaluatePartnerProfitDraw(
       {
         organizationId: ORG_SALVAGE,
         targetUserId: 'cfo-1',
@@ -1480,15 +1498,311 @@ describe('3-Rule Compensation Protocol (RULE-PAY-001 to RULE-PAY-003)', () => {
           approved: true,
           approvedById: 'cfo-1',
           approverRole: 'ARCHITECT_CFO',
-          reasonNote: 'Attempt to breach bank reserve via CFO override',
+          reasonNote: 'CFO authorized temporary reserve-floor dip for quarterly partner distribution.',
         },
       },
       policy,
     );
-    expect(reserveLockedDraw.allowed).toBe(false);
-    expect(reserveLockedDraw.overrideApplied).toBe(false);
-    expect(reserveLockedDraw.blockingCodes).toContain(
+    expect(reserveOverrideAllowed.allowed).toBe(true);
+    expect(reserveOverrideAllowed.overrideApplied).toBe(true);
+    expect(reserveOverrideAllowed.warnings).toContain(
+      'WORKING_CAPITAL_RESERVE_BREACHED',
+    );
+    expect(reserveOverrideAllowed.cfoOverrideAudit).toEqual({
+      overrideApplied: true,
+      approvedById: 'cfo-1',
+      reasonNote:
+        'CFO authorized temporary reserve-floor dip for quarterly partner distribution.',
+    });
+
+    // Forged non-CFO actor cannot waive reserve floor even with spoofed cfoOverride fields
+    const forgedReserveOverride = evaluatePartnerProfitDraw(
+      {
+        organizationId: ORG_SALVAGE,
+        targetUserId: 'hunter-1',
+        targetUserRole: 'HUNTER_MECHANIC',
+        requestedDrawCadMinor: 50_001,
+        snapshotInput: lowBankReserveInput,
+        actor: { actorUserId: 'hunter-1', actorRole: 'HUNTER_MECHANIC' },
+        cfoOverride: {
+          approved: true,
+          approvedById: 'cfo-1',
+          approverRole: 'ARCHITECT_CFO',
+          reasonNote: 'Spoofed CFO override by hunter',
+        },
+      },
+      policy,
+    );
+    expect(forgedReserveOverride.allowed).toBe(false);
+    expect(forgedReserveOverride.overrideApplied).toBe(false);
+    expect(forgedReserveOverride.blockingCodes).toContain(
+      'CFO_OVERRIDE_UNAUTHORIZED',
+    );
+    expect(forgedReserveOverride.blockingCodes).toContain(
       'INSUFFICIENT_LIQUID_RESERVE_CAPACITY',
     );
+
+    // Hard liquidity cap: even valid CFO override CANNOT disburse more than actual availableWorkingCapitalCadMinor (protects HST trust!)
+    const hstProtectedInput = makeBaseSnapshotInput({
+      tranches: [
+        {
+          trancheCode: 'TRANCHE_1_LAUNCH',
+          principalCadMinor: 0,
+          unlocked: true,
+        },
+      ],
+      sales: [
+        {
+          id: 's-hst-protected',
+          organizationId: ORG_SALVAGE,
+          marketNode: 'DOMESTIC_ORIGIN',
+          domesticChannel: 'FB_MARKETPLACE_LOCAL',
+          paymentCurrency: 'CAD',
+          taxCollectionMode: 'DIRECT_SELLER_COLLECTED',
+          subtotalMinor: 800_000,
+          gstHstTaxCadMinor: 104_000,
+          provincialTaxCadMinor: 0,
+          taxOrVatMinor: 104_000,
+          platformFeeMinor: 0,
+          shippingCostMinor: 0,
+          estimatedPlatformFeeTaxCadMinor: 0,
+          itcReceivableCadMinor: 0,
+          isFeeTaxInvoiceVerified: false,
+          grossCollectedMinor: 904_000,
+          netRealizedCadMinor: 800_000,
+          bankClearedCadMinor: 904_000,
+          paymentSettlementState: 'BANK_SETTLEMENT_CONFIRMED',
+          cashCustodyState: 'SETTLED_ORIGIN_CORP_BANK',
+          bankSettledAt: '2026-04-06T12:00:00Z',
+          bankDepositReference: 'INT-3',
+          isVoidedOrReversed: false,
+        },
+      ],
+    });
+    // Profit pool = 800,000 - 104,000 = 696,000; availableWorkingCapital = 904,000 - 104,000 = 800,000
+    // Trying 800,001 exceeds both profit pool AND hard working capital (attempting to spend HST trust)
+    const hardCapDraw = evaluatePartnerProfitDraw(
+      {
+        organizationId: ORG_SALVAGE,
+        targetUserId: 'cfo-1',
+        targetUserRole: 'ARCHITECT_CFO',
+        requestedDrawCadMinor: 800_001,
+        snapshotInput: hstProtectedInput,
+        actor: { actorUserId: 'cfo-1', actorRole: 'ARCHITECT_CFO' },
+        cfoOverride: {
+          approved: true,
+          approvedById: 'cfo-1',
+          approverRole: 'ARCHITECT_CFO',
+          reasonNote: 'Attempt to spend HST trust or exceed actual working capital',
+        },
+      },
+      policy,
+    );
+    expect(hardCapDraw.allowed).toBe(false);
+    expect(hardCapDraw.overrideApplied).toBe(false);
+    expect(hardCapDraw.blockingCodes).toContain(
+      'INSUFFICIENT_REALIZED_PROFIT_POOL',
+    );
+  });
+
+  it('computes DetailedTaxCounters, zero-impact PARTNER_TIME_LOG_MEMO, and mixed float/bank draw split without double deduction', () => {
+    const policy = makePolicy();
+    const counters = computeDetailedTaxCounters({
+      organizationId: ORG_SALVAGE,
+      sales: [
+        {
+          id: 's-1',
+          organizationId: ORG_SALVAGE,
+          taxCollectionMode: 'DIRECT_SELLER_COLLECTED',
+          gstHstTaxCadMinor: 13_000,
+          itcReceivableCadMinor: 0,
+          isFeeTaxInvoiceVerified: false,
+          paymentSettlementState: 'BANK_SETTLEMENT_CONFIRMED',
+        },
+      ],
+      expenses: [
+        {
+          id: 'e-1',
+          organizationId: ORG_SALVAGE,
+          itcReceivableCadMinor: 1_300,
+          receiptVerificationState: 'VERIFIED_RECEIPT',
+          receiptStorageKey: 'org/evidence/1',
+        },
+      ],
+    });
+    expect(counters).toEqual({
+      directTaxCollectedNetOfRefundsCadMinor: 13_000,
+      verifiedItcReceivableCadMinor: 1_300,
+      netHstTrustLiabilityCadMinor: 11_700,
+    });
+
+    const snapshot = computeSeparatedFinancialSnapshot(
+      makeBaseSnapshotInput({
+        sales: [
+          {
+            id: 's-cash-hunter',
+            organizationId: ORG_SALVAGE,
+            marketNode: 'DOMESTIC_ORIGIN',
+            domesticChannel: 'LOCAL_WALK_IN_CASH',
+            paymentCurrency: 'CAD',
+            taxCollectionMode: 'NOT_REGISTERED_NO_TAX',
+            subtotalMinor: 4_000,
+            gstHstTaxCadMinor: 0,
+            taxOrVatMinor: 0,
+            platformFeeMinor: 0,
+            shippingCostMinor: 0,
+            itcReceivableCadMinor: 0,
+            isFeeTaxInvoiceVerified: false,
+            grossCollectedMinor: 4_000,
+            netRealizedCadMinor: 4_000,
+            paymentSettlementState: 'PAYMENT_CONFIRMED',
+            cashCustodyState: 'HELD_IN_OPERATOR_FLOAT',
+            custodyHolderUserId: 'hunter-1',
+            isVoidedOrReversed: false,
+          },
+          {
+            id: 's-bank-sale',
+            organizationId: ORG_SALVAGE,
+            marketNode: 'DOMESTIC_ORIGIN',
+            domesticChannel: 'FB_MARKETPLACE_LOCAL',
+            paymentCurrency: 'CAD',
+            taxCollectionMode: 'NOT_REGISTERED_NO_TAX',
+            subtotalMinor: 20_000,
+            gstHstTaxCadMinor: 0,
+            taxOrVatMinor: 0,
+            platformFeeMinor: 0,
+            shippingCostMinor: 0,
+            itcReceivableCadMinor: 0,
+            isFeeTaxInvoiceVerified: false,
+            grossCollectedMinor: 20_000,
+            netRealizedCadMinor: 20_000,
+            bankClearedCadMinor: 20_000,
+            paymentSettlementState: 'BANK_SETTLEMENT_CONFIRMED',
+            cashCustodyState: 'SETTLED_ORIGIN_CORP_BANK',
+            bankSettledAt: '2026-04-06T12:00:00Z',
+            bankDepositReference: 'DEP-1',
+            isVoidedOrReversed: false,
+          },
+        ],
+        expenses: [
+          {
+            id: 'memo-1',
+            organizationId: ORG_SALVAGE,
+            category: 'PARTNER_TIME_LOG_MEMO',
+            currencyOriginal: 'CAD',
+            amountOriginalMinor: 0,
+            amountCadMinor: 0,
+            itcReceivableCadMinor: 0,
+            paidFromCashCustody: null,
+            isDeferredIntercompanyAccrual: false,
+            receiptVerificationState: 'PENDING_RECEIPT_UPLOAD',
+          },
+          {
+            id: 'draw-split-1',
+            organizationId: ORG_SALVAGE,
+            category: 'PARTNER_PROFIT_DRAW',
+            currencyOriginal: 'CAD',
+            amountOriginalMinor: 10_000,
+            amountCadMinor: 10_000,
+            floatOffsetAppliedCadMinor: 4_000,
+            recipientUserId: 'hunter-1',
+            custodyHolderUserId: 'hunter-1',
+            loggedByUserId: 'cfo-1',
+            itcReceivableCadMinor: 0,
+            paidFromCashCustody: 'SETTLED_ORIGIN_CORP_BANK',
+            isDeferredIntercompanyAccrual: false,
+            receiptVerificationState: 'PENDING_RECEIPT_UPLOAD',
+          },
+        ],
+      }),
+      policy,
+    );
+    // Float: 4,000 - 4,000 = 0; Bank: 2,200,000 + 20,000 - 6,000 = 2,214,000; Profit: 24,000 - 10,000 = 14,000
+    expect(snapshot.runningOperatorFloatCadMinor).toBe(0);
+    expect(snapshot.operatorFloatByUserId['hunter-1']).toBe(0);
+    expect(snapshot.confirmedCorpBankCashCadMinor).toBe(2_214_000);
+    expect(snapshot.distributableRealizedProfitPoolCadMinor).toBe(14_000);
+  });
+
+  it('uses grossCollectedMinor for grossSaleValueCadMinor and normalizes REFUNDED_OR_CHARGED_BACK bank-settled sales with explicit refundAdjustments', () => {
+    const policy = makePolicy();
+
+    const snapshot = computeSeparatedFinancialSnapshot(
+      makeBaseSnapshotInput({
+        sales: [
+          {
+            id: 'sale-bank-with-shipping',
+            organizationId: ORG_SALVAGE,
+            marketNode: 'DOMESTIC_ORIGIN',
+            domesticChannel: 'FB_MARKETPLACE_LOCAL',
+            paymentCurrency: 'CAD',
+            taxCollectionMode: 'DIRECT_SELLER_COLLECTED',
+            subtotalMinor: 10_000,
+            gstHstTaxCadMinor: 1_300,
+            taxOrVatMinor: 1_300,
+            platformFeeMinor: 0,
+            shippingCostMinor: 1_500,
+            itcReceivableCadMinor: 0,
+            isFeeTaxInvoiceVerified: false,
+            // Buyer paid $128.00 ($100 part + $13 tax + $15 shipping)
+            grossCollectedMinor: 12_800,
+            netRealizedCadMinor: 12_800,
+            bankClearedCadMinor: 12_800,
+            paymentSettlementState: 'BANK_SETTLEMENT_CONFIRMED',
+            cashCustodyState: 'SETTLED_ORIGIN_CORP_BANK',
+            bankSettledAt: '2026-04-06T12:00:00Z',
+            bankDepositReference: 'DEP-SHIP-1',
+            isVoidedOrReversed: false,
+          },
+          {
+            id: 'sale-bank-refunded-explicit',
+            organizationId: ORG_SALVAGE,
+            marketNode: 'DOMESTIC_ORIGIN',
+            domesticChannel: 'FB_MARKETPLACE_LOCAL',
+            paymentCurrency: 'CAD',
+            taxCollectionMode: 'DIRECT_SELLER_COLLECTED',
+            subtotalMinor: 20_000,
+            gstHstTaxCadMinor: 2_600,
+            taxOrVatMinor: 2_600,
+            platformFeeMinor: 0,
+            shippingCostMinor: 0,
+            itcReceivableCadMinor: 0,
+            isFeeTaxInvoiceVerified: false,
+            grossCollectedMinor: 22_600,
+            netRealizedCadMinor: 20_000,
+            bankClearedCadMinor: 22_600,
+            paymentSettlementState: 'REFUNDED_OR_CHARGED_BACK',
+            cashCustodyState: 'SETTLED_ORIGIN_CORP_BANK',
+            bankSettledAt: '2026-04-06T12:00:00Z',
+            bankDepositReference: 'DEP-REF-1',
+            isVoidedOrReversed: true,
+          },
+        ],
+        refundAdjustments: [
+          {
+            id: 'adj-bank-full-refund',
+            organizationId: ORG_SALVAGE,
+            originalSaleId: 'sale-bank-refunded-explicit',
+            taxCollectionMode: 'DIRECT_SELLER_COLLECTED',
+            subtotalAdjustmentMinor: -20_000,
+            gstHstAdjustmentCadMinor: -2_600,
+            provincialTaxAdjustmentCadMinor: 0,
+            itcAdjustmentCadMinor: 0,
+            grossAdjustmentMinor: -22_600,
+            netRealizedCadAdjustmentMinor: -20_000,
+            refundSettlementAccount: 'CORP_BANK',
+          },
+        ],
+      }),
+      policy,
+    );
+
+    expect(snapshot.accountingRevenueCadMinor).toBe(10_000);
+    expect(snapshot.grossSaleValueCadMinor).toBe(12_800);
+    // Bank: 2,200,000 + 12,800 + (22,600 - 22,600) = 2,212,800
+    expect(snapshot.confirmedCorpBankCashCadMinor).toBe(2_212_800);
+    expect(snapshot.netHstTrustLiabilityCadMinor).toBe(1_300);
+    // Profit: (12,800) + (20,000 - 20,000) - 1,300 = 11,500
+    expect(snapshot.distributableRealizedProfitPoolCadMinor).toBe(11_500);
   });
 });
