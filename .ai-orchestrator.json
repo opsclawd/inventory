@@ -4,6 +4,7 @@
       "pnpm db:generate",
       "pnpm typecheck",
       "pnpm verify:no-stubs",
+      "DATABASE_URL=postgresql://postgres:postgres@localhost:5432/salvage_erp_test DIRECT_URL=postgresql://postgres:postgres@localhost:5432/salvage_erp_test pnpm db:migrate",
       "DIRECT_URL=postgresql://postgres:postgres@localhost:5432/salvage_erp_test DATABASE_URL=postgresql://erp_app_user:erp_app_test_pw@localhost:5432/salvage_erp_test?pgbouncer=true TEST_DATABASE_URL=postgresql://erp_app_user:erp_app_test_pw@localhost:5432/salvage_erp_test?pgbouncer=true pnpm test",
       "DIRECT_URL=postgresql://postgres:postgres@localhost:5432/salvage_erp_test DATABASE_URL=postgresql://erp_app_user:erp_app_test_pw@localhost:5432/salvage_erp_test?pgbouncer=true TEST_DATABASE_URL=postgresql://erp_app_user:erp_app_test_pw@localhost:5432/salvage_erp_test?pgbouncer=true pnpm test:db:rls"
     ],

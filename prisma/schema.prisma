@@ -268,7 +268,7 @@ model CustodyEvent {
   cannabisLot         CannabisLot? @relation(fields: [organizationId, cannabisLotId], references: [organizationId, id], onDelete: Restrict, onUpdate: Cascade)
   actorUserId         String       @db.Uuid
   actorUser           User         @relation(fields: [actorUserId], references: [id])
-  idempotencyKey      String       @unique // Client UUIDv7 generated at scan time
+  idempotencyKey      String       // Client UUIDv7 generated at scan time (scoped per organizationId)
   fromLocationBarcode String?
   toLocationBarcode   String       // Bin QR, Pallet QR, Vault Shelf QR, or Grow Table QR
   expectedVersion     Int
@@ -278,6 +278,7 @@ model CustodyEvent {
   serverReceivedAt    DateTime     @default(now())
 
   @@unique([organizationId, id])
+  @@unique([organizationId, idempotencyKey])
   @@index([organizationId, serverReceivedAt])
   @@index([partId, serverReceivedAt])
   @@index([vehicleId, serverReceivedAt])
