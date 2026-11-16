@@ -107,12 +107,14 @@ export {
 } from './vault-pricing-and-checkout-corridor';
 
 export {
+  computeDetailedTaxCounters,
   computeNetHstTrustLiabilityCadMinor,
   computeSeparatedFinancialSnapshot,
   evaluatePartnerProfitDraw,
   evaluatePieceRatePayout,
   evaluateTrancheMilestoneEligibility,
   evaluateWorkingCapitalGate,
+  type DetailedTaxCounters,
   type FinancialSnapshotInput,
   type LoanTrancheStatusRow,
   type NetHstTrustLiabilityInput,

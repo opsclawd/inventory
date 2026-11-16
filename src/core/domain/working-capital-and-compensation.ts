@@ -78,6 +78,12 @@ export interface NetHstTrustLiabilityInput {
   readonly refundAdjustments?: readonly TaxRefundAdjustmentRow[];
 }
 
+export interface DetailedTaxCounters {
+  readonly directTaxCollectedNetOfRefundsCadMinor: number;
+  readonly verifiedItcReceivableCadMinor: number;
+  readonly netHstTrustLiabilityCadMinor: number;
+}
+
 export interface LoanTrancheStatusRow {
   readonly trancheCode: string;
   readonly principalCadMinor: number;
@@ -170,6 +176,8 @@ export interface SnapshotExpenseRow {
   readonly itcReceivableCadMinor: number;
   readonly paidFromCashCustody?: CashCustodyState | null;
   readonly custodyHolderUserId?: string | null;
+  readonly recipientUserId?: string | null;
+  readonly floatOffsetAppliedCadMinor?: number;
   readonly loggedByUserId?: string | null;
   readonly isDeferredIntercompanyAccrual: boolean;
   readonly accrualSettledAt?: string | Date | null;
@@ -389,20 +397,9 @@ function resolveDirectGstHstForSale(sale: TaxSaleLedgerRow): number {
   return assertNonNegativeSafeInt(sale.gstHstTaxCadMinor, 'gstHstTaxCadMinor');
 }
 
-/**
- * Pure CRA GST/HST trust liability calculator (`RULE-TAX-HST-01` / `FIX 06`).
- *
- * Strictly ring-fences:
- * - Direct seller-collected CRA GST/HST (`DIRECT_SELLER_COLLECTED`), excluding standalone
- *   provincial QST/PST (`provincialTaxCadMinor`) and marketplace-remitted buyer taxes.
- * - Verified seller-fee tax ITCs (`isFeeTaxInvoiceVerified === true` + non-empty storage key)
- *   and `VERIFIED_RECEIPT` expense ITCs, ignoring unverified estimates even if populated.
- * - Normalizes `refundAdjustments` against `REFUNDED_OR_CHARGED_BACK` sales without double-deducting.
- * - Clamps at `0` so excess ITC claims never fabricate spendable bank working capital.
- */
-export function computeNetHstTrustLiabilityCadMinor(
+export function computeDetailedTaxCounters(
   input: NetHstTrustLiabilityInput,
-): number {
+): DetailedTaxCounters {
   const organizationId = assertNonEmptyTrimmedString(
     input.organizationId,
     'INVALID_INPUT',
@@ -549,14 +546,47 @@ export function computeNetHstTrustLiabilityCadMinor(
     verifiedItcTotal += BigInt(exp.isReversalEntry ? -expItc : expItc);
   }
 
-  if (directTaxCollected <= 0n || directTaxCollected <= verifiedItcTotal) {
-    return 0;
-  }
+  const directClamped =
+    directTaxCollected > 0n
+      ? bigIntToSafeNumber(
+          directTaxCollected,
+          'directTaxCollectedNetOfRefundsCadMinor',
+        )
+      : 0;
+  const itcClamped =
+    verifiedItcTotal > 0n
+      ? bigIntToSafeNumber(verifiedItcTotal, 'verifiedItcReceivableCadMinor')
+      : 0;
+  const netLiability =
+    directTaxCollected <= 0n || directTaxCollected <= verifiedItcTotal
+      ? 0
+      : bigIntToSafeNumber(
+          directTaxCollected - verifiedItcTotal,
+          'netHstTrustLiabilityCadMinor',
+        );
 
-  return bigIntToSafeNumber(
-    directTaxCollected - verifiedItcTotal,
-    'netHstTrustLiabilityCadMinor',
-  );
+  return {
+    directTaxCollectedNetOfRefundsCadMinor: directClamped,
+    verifiedItcReceivableCadMinor: itcClamped,
+    netHstTrustLiabilityCadMinor: netLiability,
+  };
+}
+
+/**
+ * Pure CRA GST/HST trust liability calculator (`RULE-TAX-HST-01` / `FIX 06`).
+ *
+ * Strictly ring-fences:
+ * - Direct seller-collected CRA GST/HST (`DIRECT_SELLER_COLLECTED`), excluding standalone
+ *   provincial QST/PST (`provincialTaxCadMinor`) and marketplace-remitted buyer taxes.
+ * - Verified seller-fee tax ITCs (`isFeeTaxInvoiceVerified === true` + non-empty storage key)
+ *   and `VERIFIED_RECEIPT` expense ITCs, ignoring unverified estimates even if populated.
+ * - Normalizes `refundAdjustments` against `REFUNDED_OR_CHARGED_BACK` sales without double-deducting.
+ * - Clamps at `0` so excess ITC claims never fabricate spendable bank working capital.
+ */
+export function computeNetHstTrustLiabilityCadMinor(
+  input: NetHstTrustLiabilityInput,
+): number {
+  return computeDetailedTaxCounters(input).netHstTrustLiabilityCadMinor;
 }
 
 function addUserFloatDelta(
@@ -846,7 +876,7 @@ export function computeSeparatedFinancialSnapshot(
     }
 
     const activeSubtotal = BigInt(subtotal) + adjSubtotal;
-    const activeGrossForValue = BigInt(subtotal + taxOrVat) + adjGross;
+    const activeGrossForValue = BigInt(grossCollected) + adjGross;
     if (sale.paymentCurrency === 'CAD') {
       accountingRevenue += activeSubtotal;
       grossSaleValue += activeGrossForValue > 0n ? activeGrossForValue : 0n;
@@ -880,7 +910,9 @@ export function computeSeparatedFinancialSnapshot(
       confirmedCorpBankCash += adjBankRefund;
       realizedSaleProfitContribution += BigInt(netRealizedCad) + adjNetRealized;
     } else if (
-      sale.paymentSettlementState === 'BANK_SETTLEMENT_CONFIRMED' &&
+      (sale.paymentSettlementState === 'BANK_SETTLEMENT_CONFIRMED' ||
+        (hasExplicitAdjustments &&
+          sale.paymentSettlementState === 'REFUNDED_OR_CHARGED_BACK')) &&
       sale.cashCustodyState === 'SETTLED_ORIGIN_CORP_BANK'
     ) {
       const bankCleared =
@@ -896,6 +928,7 @@ export function computeSeparatedFinancialSnapshot(
             (sale.shippingDeductedFromPayout === true ? BigInt(shippingCost) : 0n);
 
       confirmedCorpBankCash += bankCleared + adjBankRefund;
+      operatorFloat += adjFloatRefund;
       realizedSaleProfitContribution += BigInt(netRealizedCad) + adjNetRealized;
     }
   }
@@ -940,6 +973,36 @@ export function computeSeparatedFinancialSnapshot(
       exp.amountCadMinor,
       `expense[${exp.id}].amountCadMinor`,
     );
+    const floatOffset = assertNonNegativeSafeInt(
+      exp.floatOffsetAppliedCadMinor ?? 0,
+      `expense[${exp.id}].floatOffsetAppliedCadMinor`,
+    );
+    if (floatOffset > amt) {
+      throw new DomainRuleError(
+        'INVALID_INPUT',
+        `Expense "${exp.id}" floatOffsetAppliedCadMinor (${floatOffset}) exceeds amountCadMinor (${amt}).`,
+      );
+    }
+    if (floatOffset > 0 && exp.category !== 'PARTNER_PROFIT_DRAW') {
+      throw new DomainRuleError(
+        'INVALID_INPUT',
+        `Non-draw expense "${exp.id}" cannot carry floatOffsetAppliedCadMinor.`,
+      );
+    }
+    if (exp.category === 'PARTNER_TIME_LOG_MEMO') {
+      if (
+        amt !== 0 ||
+        (exp.amountOriginalMinor ?? 0) !== 0 ||
+        exp.itcReceivableCadMinor !== 0 ||
+        exp.isDeferredIntercompanyAccrual
+      ) {
+        throw new DomainRuleError(
+          'INVALID_INPUT',
+          `PARTNER_TIME_LOG_MEMO "${exp.id}" must carry zero financial amounts and zero deferral.`,
+        );
+      }
+      continue;
+    }
     if (exp.currencyOriginal !== 'CAD' && amt === 0 && (exp.amountOriginalMinor ?? 0) > 0) {
       throw new DomainRuleError(
         'UNCONVERTED_NON_CAD_AMOUNT',
@@ -963,11 +1026,25 @@ export function computeSeparatedFinancialSnapshot(
       continue;
     }
 
-    if (exp.paidFromCashCustody === 'HELD_IN_OPERATOR_FLOAT') {
+    if (exp.category === 'PARTNER_PROFIT_DRAW' && floatOffset > 0) {
+      const signedFloatOffset = BigInt(
+        exp.isReversalEntry ? -floatOffset : floatOffset,
+      );
+      const signedBankRemainder = signedAmt - signedFloatOffset;
+      operatorFloat -= signedFloatOffset;
+      addUserFloatDelta(
+        userFloatMap,
+        exp.custodyHolderUserId ?? exp.recipientUserId ?? exp.loggedByUserId,
+        -signedFloatOffset,
+      );
+      if (signedBankRemainder !== 0n) {
+        confirmedCorpBankCash -= signedBankRemainder;
+      }
+    } else if (exp.paidFromCashCustody === 'HELD_IN_OPERATOR_FLOAT') {
       operatorFloat -= signedAmt;
       addUserFloatDelta(
         userFloatMap,
-        exp.custodyHolderUserId ?? exp.loggedByUserId,
+        exp.custodyHolderUserId ?? exp.recipientUserId ?? exp.loggedByUserId,
         -signedAmt,
       );
     } else {
@@ -1357,8 +1434,12 @@ export function evaluatePieceRatePayout(
  * Pure `RULE-PAY-002` & `RULE-PAY-003` evaluator for `PARTNER_PROFIT_DRAW`:
  * - Ring-fences loan tranches, pending receivables, accrued expenses, and `NetHstTrustLiability_CAD`.
  * - Offsets `HUNTER_MECHANIC` draws strictly against that operator's own float first.
- * - Caps bank disbursement by `AvailableWorkingCapital_CAD - minCashReserveFloorCadMinor`.
- * - Non-overridable (`cfoOverride` cannot bypass profit pool, verified-tax, or bank reserve invariants).
+ * - Caps bank disbursement by `max(0, AvailableWorkingCapital_CAD - minCashReserveFloorCadMinor)`.
+ * - Narrow reserve-floor exception: an authenticated `ARCHITECT_CFO` (`input.actor`) with a
+ *   non-blank `cfoOverride.reasonNote` may waive ONLY the `minCashReserveFloorCadMinor` reserve
+ *   gate. Profit-pool sufficiency (`distributableRealizedProfitPoolCadMinor`), hard liquidity
+ *   (`max(0, availableWorkingCapitalCadMinor)` protecting `NetHstTrustLiability_CAD`), and
+ *   caller-supplied role/ID forgery checks remain strictly non-overridable.
  */
 export function evaluatePartnerProfitDraw(
   input: PartnerProfitDrawInput,
@@ -1410,6 +1491,10 @@ export function evaluatePartnerProfitDraw(
       'maxBankDisbursementAllowedCadMinor',
     ),
   );
+  const hardBankWorkingCapitalCapCadMinor = Math.max(
+    0,
+    snapshot.availableWorkingCapitalCadMinor,
+  );
 
   const rawTargetFloat =
     input.targetOperatorFloatOverrideCadMinor !== undefined
@@ -1435,14 +1520,59 @@ export function evaluatePartnerProfitDraw(
   const blockingCodes: DomainRuleErrorCode[] = [];
   const warnings: string[] = [];
 
-  if (requestedDrawCadMinor > profitPool) {
+  const profitPoolInsufficient = requestedDrawCadMinor > profitPool;
+  const exceedsHardWorkingCapital =
+    netCashDisbursedFromBankCadMinor > hardBankWorkingCapitalCapCadMinor;
+  const breachesReserveFloorOnly =
+    !exceedsHardWorkingCapital &&
+    netCashDisbursedFromBankCadMinor > maxBankDisbursementAllowedCadMinor;
+
+  if (profitPoolInsufficient) {
     blockingCodes.push('INSUFFICIENT_REALIZED_PROFIT_POOL');
   }
-  if (netCashDisbursedFromBankCadMinor > maxBankDisbursementAllowedCadMinor) {
+  if (exceedsHardWorkingCapital) {
     blockingCodes.push('INSUFFICIENT_LIQUID_RESERVE_CAPACITY');
   }
 
-  if (input.cfoOverride?.approved === true && blockingCodes.length > 0) {
+  const overrideEval = evaluateCfoOverride(input.actor, input.cfoOverride);
+  const actorIsAuthenticatedCfo =
+    input.actor?.actorRole === 'ARCHITECT_CFO' &&
+    isNonEmptyTrimmedString(input.actor.actorUserId);
+  const trustedCfoOverrideValid =
+    overrideEval.requested &&
+    overrideEval.valid &&
+    actorIsAuthenticatedCfo &&
+    overrideEval.audit.approvedById === input.actor!.actorUserId.trim();
+
+  if (overrideEval.requested && !trustedCfoOverrideValid) {
+    const failureCode =
+      overrideEval.failureCode ?? 'CFO_OVERRIDE_UNAUTHORIZED';
+    if (!blockingCodes.includes(failureCode)) {
+      blockingCodes.push(failureCode);
+    }
+  }
+
+  let overrideApplied = false;
+  let cfoOverrideAudit = {
+    overrideApplied: false,
+    approvedById: null as string | null,
+    reasonNote: null as string | null,
+  };
+
+  if (breachesReserveFloorOnly) {
+    if (trustedCfoOverrideValid && !profitPoolInsufficient) {
+      overrideApplied = true;
+      cfoOverrideAudit = overrideEval.audit;
+      warnings.push('WORKING_CAPITAL_RESERVE_BREACHED');
+    } else {
+      blockingCodes.push('INSUFFICIENT_LIQUID_RESERVE_CAPACITY');
+    }
+  }
+
+  if (
+    overrideEval.requested &&
+    (profitPoolInsufficient || exceedsHardWorkingCapital)
+  ) {
     warnings.push('CFO_OVERRIDE_IGNORED_FOR_SOLVENCY_INVARIANT');
   }
 
@@ -1450,12 +1580,8 @@ export function evaluatePartnerProfitDraw(
     allowed: blockingCodes.length === 0,
     blockingCodes,
     warnings,
-    overrideApplied: false,
-    cfoOverrideAudit: {
-      overrideApplied: false,
-      approvedById: null,
-      reasonNote: null,
-    },
+    overrideApplied,
+    cfoOverrideAudit,
     requestedDrawCadMinor,
     distributableRealizedProfitPoolCadMinor: profitPool,
     availableWorkingCapitalCadMinor: snapshot.availableWorkingCapitalCadMinor,

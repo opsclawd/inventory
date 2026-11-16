@@ -71,6 +71,7 @@ enum ExpenseCategory {
   PROCESSING_SOLVENTS_AND_CONSUMABLES
   EXCISE_STAMP_AND_DUTY
   PARTNER_PROFIT_DRAW                 // Realized-profit partner draw gated by RULE-PAY-002 & RULE-PAY-003
+  PARTNER_TIME_LOG_MEMO               // Zero-cash descriptive partner time log memo (no float/bank/profit impact)
 
   @@schema("shared")
 }
@@ -221,6 +222,10 @@ model OrganizationMembership {
   createdAt          DateTime     @default(now())
   updatedAt          DateTime     @updatedAt
 
+  recipientExpenses    Expense[]             @relation("ExpenseRecipientMembership")
+  custodyHeldExpenses  Expense[]             @relation("ExpenseCustodyHolderMembership")
+  custodyHeldTransfers CashCustodyTransfer[] @relation("TransferCustodyHolderMembership")
+
   @@unique([organizationId, id])
   @@unique([organizationId, userId])
   @@index([userId, isActive])
@@ -298,6 +303,12 @@ model Expense {
   cannabisLot           CannabisLot?         @relation(fields: [organizationId, cannabisLotId], references: [organizationId, id], onDelete: Restrict, onUpdate: Cascade)
   loggedByUserId        String               @db.Uuid
   loggedByUser          User                 @relation("LoggedByUser", fields: [loggedByUserId], references: [id])
+  recipientUserId       String?              @db.Uuid
+  recipientMembership   OrganizationMembership? @relation("ExpenseRecipientMembership", fields: [organizationId, recipientUserId], references: [organizationId, userId], onDelete: Restrict, onUpdate: Cascade)
+  floatOffsetAppliedCadMinor Int             @default(0)
+  custodyHolderUserId   String?              @db.Uuid
+  custodyHolderMembership OrganizationMembership? @relation("ExpenseCustodyHolderMembership", fields: [organizationId, custodyHolderUserId], references: [organizationId, userId], onDelete: Restrict, onUpdate: Cascade)
+  idempotencyKey        String?
 
   category                      ExpenseCategory
   vendorName                    String
@@ -329,7 +340,11 @@ model Expense {
   createdAt             DateTime             @default(now())
 
   @@unique([organizationId, id])
+  @@unique([organizationId, idempotencyKey])
   @@index([organizationId, incurredAt])
+  @@index([organizationId, loggedByUserId, receiptVerificationState, createdAt])
+  @@index([organizationId, recipientUserId])
+  @@index([organizationId, custodyHolderUserId])
   @@index([vehicleId])
   @@index([shipmentId])
   @@index([cannabisLotId])
@@ -352,13 +367,18 @@ model CashCustodyTransfer {
   depositSlipStorageKey  String               // Mandatory private R2 key (enforced non-empty via SQL CHECK)
   recordedByUserId       String               @db.Uuid
   recordedByUser         User                 @relation("TransferRecordedByUser", fields: [recordedByUserId], references: [id])
+  custodyHolderUserId    String?              @db.Uuid
+  custodyHolderMembership OrganizationMembership? @relation("TransferCustodyHolderMembership", fields: [organizationId, custodyHolderUserId], references: [organizationId, userId], onDelete: Restrict, onUpdate: Cascade)
+  idempotencyKey         String?
   accountingSyncStatus   AccountingSyncStatus @default(PENDING_SYNC)
   externalGlJournalId    String?
   transferredAt          DateTime             @default(now())
   createdAt              DateTime             @default(now())
 
   @@unique([organizationId, id])
+  @@unique([organizationId, idempotencyKey])
   @@index([organizationId, transferredAt])
+  @@index([organizationId, custodyHolderUserId])
   @@index([marketNode, fromCustodyState, toCustodyState])
   @@index([commercialBankName])
   @@schema("shared")
