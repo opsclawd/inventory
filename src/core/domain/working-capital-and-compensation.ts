@@ -126,6 +126,7 @@ export interface SnapshotRefundAdjustmentRow extends TaxRefundAdjustmentRow {
   readonly subtotalAdjustmentMinor: number;
   readonly grossAdjustmentMinor: number;
   readonly netRealizedCadAdjustmentMinor?: number;
+  readonly bankCashAdjustmentCadMinor?: number;
   readonly refundSettlementAccount?:
     | 'CORP_BANK'
     | 'OPERATOR_FLOAT'
@@ -854,8 +855,33 @@ export function computeSeparatedFinancialSnapshot(
             ? 'OPERATOR_FLOAT'
             : 'PENDING_EXTERNAL_RECEIVABLE');
 
+      if (adj.bankCashAdjustmentCadMinor !== undefined) {
+        const bAdj = assertSafeInt(
+          adj.bankCashAdjustmentCadMinor,
+          `adj[${adj.id}].bankCashAdjustmentCadMinor`,
+        );
+        if (bAdj > 0) {
+          throw new DomainRuleError(
+            'INVALID_INPUT',
+            `Refund adjustment "${adj.id}" cannot have positive bankCashAdjustmentCadMinor.`,
+          );
+        }
+        if (resolvedRefundSource !== 'CORP_BANK') {
+          throw new DomainRuleError(
+            'INVALID_INPUT',
+            `Refund adjustment "${adj.id}" bankCashAdjustmentCadMinor is only valid for CORP_BANK refunds.`,
+          );
+        }
+        if (Math.abs(bAdj) > Math.abs(gAdj)) {
+          throw new DomainRuleError(
+            'REFUND_EXCEEDS_ORIGINAL_SALE',
+            `Refund adjustment "${adj.id}" bankCashAdjustmentCadMinor magnitude exceeds grossAdjustmentMinor.`,
+          );
+        }
+      }
+
       if (resolvedRefundSource === 'CORP_BANK') {
-        adjBankRefund += BigInt(gAdj);
+        adjBankRefund += BigInt(adj.bankCashAdjustmentCadMinor ?? gAdj);
       } else if (resolvedRefundSource === 'OPERATOR_FLOAT') {
         adjFloatRefund += BigInt(gAdj);
         addUserFloatDelta(
@@ -864,7 +890,9 @@ export function computeSeparatedFinancialSnapshot(
           BigInt(gAdj),
         );
       } else {
-        adjPendingRefund += BigInt(nAdj);
+        adjPendingRefund += BigInt(
+          sale.domesticChannel === 'EBAY_MOTORS_SHIPPED' ? nAdj : gAdj,
+        );
       }
     }
 
@@ -926,6 +954,16 @@ export function computeSeparatedFinancialSnapshot(
           : BigInt(grossCollected) -
             BigInt(platformFee) -
             (sale.shippingDeductedFromPayout === true ? BigInt(shippingCost) : 0n);
+
+      if (
+        saleAdjustments.some((a) => a.bankCashAdjustmentCadMinor !== undefined) &&
+        bankCleared + adjBankRefund < 0n
+      ) {
+        throw new DomainRuleError(
+          'REFUND_EXCEEDS_ORIGINAL_SALE',
+          `Cumulative bank cash refund adjustments exceed bankClearedCadMinor for sale "${sale.id}".`,
+        );
+      }
 
       confirmedCorpBankCash += bankCleared + adjBankRefund;
       operatorFloat += adjFloatRefund;

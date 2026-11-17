@@ -1,0 +1,3 @@
+*Action(SiteID=Canada|Country=CA|Currency=CAD|Version=1193|CC=UTF-8),CustomLabel,*Category,*Title,*ConditionID,*Description,PicURL,*Quantity,*Format,*StartPrice,*Location,PostalCode,DispatchTimeMax,ReturnsAcceptedOption,ShippingService-1:Option,Brand,Manufacturer Part Number,Relationship,RelationshipDetails
+Add,PRT-884920,177697,2018 Honda CR-V Alternator 31100-5PA-A01 EX AWD 1.5L Turbo I4,3000,"<div><h2>2018 Honda CR-V Alternator</h2></div>",https://cdn.salvage-erp.local/10000000-0000-4000-8000-000000000001/parts/PRT-884920/clean-1.webp,1,FixedPrice,165.00,"Kemptville, ON",K0G 1J0,2,ReturnsAccepted,CA_CanadaPostExpeditedParcel,Honda,31100-5PA-A01,,
+,,,,,,,,,,,,,,,,,Compatibility,"Year=2018|Make=Honda|Model=CR-V|Trim=EX AWD|Engine=1.5L Turbo I4"

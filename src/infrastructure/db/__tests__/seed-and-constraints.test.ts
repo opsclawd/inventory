@@ -22,6 +22,7 @@ import {
 import {
   EXPECTED_TABLES,
   hasPinnedEmptySearchPath,
+  validateIssue10MigrationSql,
   validateMigrationSql,
 } from '@/infrastructure/db/sql-constraints-manifest';
 import {
@@ -149,6 +150,20 @@ describe('Phase 1A SQL migration manifest validation (offline)', () => {
     expect(result.errors).toEqual([]);
     expect(result.ok).toBe(true);
     expect(EXPECTED_TABLES).toHaveLength(28);
+  });
+
+  it('passes validateIssue10MigrationSql against 0005_issue10_actual_platform_fee/migration.sql', () => {
+    const sql0005 = readFileSync(
+      path.resolve(
+        process.cwd(),
+        'prisma/migrations/0005_issue10_actual_platform_fee/migration.sql',
+      ),
+      'utf8',
+    );
+    const result = validateIssue10MigrationSql(sql0005);
+    expect(result.errors).toEqual([]);
+    expect(result.ok).toBe(true);
+    expect(validateIssue10MigrationSql('').ok).toBe(false);
   });
 
   it('fails closed on empty SQL or comment-only security directives', () => {

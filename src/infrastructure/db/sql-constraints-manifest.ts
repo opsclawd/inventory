@@ -673,6 +673,20 @@ export const EXPECTED_CHECK_CONSTRAINTS: readonly CheckConstraintSpec[] = [
   },
 ];
 
+export const EXPECTED_INCREMENTAL_CHECK_CONSTRAINTS: readonly CheckConstraintSpec[] =
+  [
+    {
+      schema: 'shared',
+      table: 'Expense',
+      name: 'expense_amounts_and_draw_split_check',
+    },
+    {
+      schema: 'salvage',
+      table: 'SaleTransaction',
+      name: 'sale_actual_platform_fee_check',
+    },
+  ];
+
 export const FORBIDDEN_CHECK_CONSTRAINTS: readonly CheckConstraintSpec[] = [
   {
     schema: 'cannabis',
@@ -1038,6 +1052,63 @@ function splitSqlStatements(sql: string): string[] {
     statements.push(tail);
   }
   return statements;
+}
+
+export function validateIssue10MigrationSql(
+  rawSql: string,
+): MigrationManifestValidationResult {
+  const errors: string[] = [];
+  if (typeof rawSql !== 'string' || rawSql.trim().length === 0) {
+    return {
+      ok: false,
+      errors: ['Issue 10 migration SQL is empty or missing.'],
+    };
+  }
+  const sql = stripSqlComments(rawSql);
+  if (sql.trim().length === 0) {
+    return {
+      ok: false,
+      errors: ['Issue 10 migration SQL contains only comments.'],
+    };
+  }
+  if (!/"actualPlatformFeeMinor"\s+INTEGER/i.test(sql)) {
+    errors.push('Missing SaleTransaction.actualPlatformFeeMinor column.');
+  }
+  if (!/ADD\s+CONSTRAINT\s+"?sale_actual_platform_fee_check"?\s+CHECK/i.test(sql)) {
+    errors.push('Missing CHECK constraint sale_actual_platform_fee_check.');
+  }
+  const immFn = extractFunctionBlock(
+    sql,
+    'salvage',
+    'prevent_sale_tx_financial_mutation',
+  );
+  if (!immFn || !/SET\s+search_path\s*=\s*''/i.test(immFn)) {
+    errors.push(
+      'Missing salvage.prevent_sale_tx_financial_mutation() with SET search_path = "".',
+    );
+  } else if (!/"actualPlatformFeeMinor"/i.test(immFn)) {
+    errors.push(
+      'prevent_sale_tx_financial_mutation() must guard actualPlatformFeeMinor immutability.',
+    );
+  }
+  const settleFn = extractFunctionBlock(
+    sql,
+    'salvage',
+    'enforce_sale_settlement_transition',
+  );
+  if (!settleFn || !/SET\s+search_path\s*=\s*''/i.test(settleFn)) {
+    errors.push(
+      'Missing salvage.enforce_sale_settlement_transition() with SET search_path = "".',
+    );
+  } else if (!/actualPlatformFeeMinor/i.test(settleFn)) {
+    errors.push(
+      'enforce_sale_settlement_transition() must enforce initial NULL actualPlatformFeeMinor.',
+    );
+  }
+  return {
+    ok: errors.length === 0,
+    errors,
+  };
 }
 
 /**
@@ -1894,7 +1965,10 @@ export async function validateLiveDatabaseCatalog(
       AND n.nspname IN ('shared', 'salvage', 'cannabis')
   `;
 
-  for (const check of EXPECTED_CHECK_CONSTRAINTS) {
+  for (const check of [
+    ...EXPECTED_CHECK_CONSTRAINTS,
+    ...EXPECTED_INCREMENTAL_CHECK_CONSTRAINTS,
+  ]) {
     if (
       !checkRows.some(
         (r) =>

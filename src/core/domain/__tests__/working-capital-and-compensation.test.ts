@@ -1805,4 +1805,205 @@ describe('3-Rule Compensation Protocol (RULE-PAY-001 to RULE-PAY-003)', () => {
     // Profit: (12,800) + (20,000 - 20,000) - 1,300 = 11,500
     expect(snapshot.distributableRealizedProfitPoolCadMinor).toBe(11_500);
   });
+
+  it('keeps net-zero bank cash, pending receivables, revenue, and profit for bank-settled eBay fee/refund witnesses (10000/1300 and 10000/1500) and direct pending e-Transfer refunds', () => {
+    const policy = makePolicy();
+
+    // Witness A: eBay sale $100.00 subtotal, $13.00 initial fee -> settled $87.00 -> reversed with bankCashAdjustmentCadMinor = -8,700
+    const ebayWitness1300 = computeSeparatedFinancialSnapshot(
+      makeBaseSnapshotInput({
+        sales: [
+          {
+            id: 'sale-ebay-1300',
+            organizationId: ORG_SALVAGE,
+            marketNode: 'DOMESTIC_ORIGIN',
+            domesticChannel: 'EBAY_MOTORS_SHIPPED',
+            paymentCurrency: 'CAD',
+            taxCollectionMode: 'MARKETPLACE_FACILITATOR_COLLECTED',
+            subtotalMinor: 10_000,
+            gstHstTaxCadMinor: 0,
+            taxOrVatMinor: 0,
+            platformFeeMinor: 1_300,
+            shippingCostMinor: 0,
+            itcReceivableCadMinor: 0,
+            isFeeTaxInvoiceVerified: false,
+            grossCollectedMinor: 10_000,
+            netRealizedCadMinor: 8_700,
+            bankClearedCadMinor: 8_700,
+            paymentSettlementState: 'REFUNDED_OR_CHARGED_BACK',
+            cashCustodyState: 'SETTLED_ORIGIN_CORP_BANK',
+            bankSettledAt: '2026-04-06T12:00:00Z',
+            bankDepositReference: 'EBAY-DEP-1300',
+            isVoidedOrReversed: true,
+          },
+        ],
+        refundAdjustments: [
+          {
+            id: 'adj-ebay-1300',
+            organizationId: ORG_SALVAGE,
+            originalSaleId: 'sale-ebay-1300',
+            taxCollectionMode: 'MARKETPLACE_FACILITATOR_COLLECTED',
+            subtotalAdjustmentMinor: -10_000,
+            gstHstAdjustmentCadMinor: 0,
+            provincialTaxAdjustmentCadMinor: 0,
+            itcAdjustmentCadMinor: 0,
+            grossAdjustmentMinor: -10_000,
+            netRealizedCadAdjustmentMinor: -8_700,
+            bankCashAdjustmentCadMinor: -8_700,
+            refundSettlementAccount: 'CORP_BANK',
+          },
+        ],
+      }),
+      policy,
+    );
+    expect(ebayWitness1300.confirmedCorpBankCashCadMinor).toBe(2_200_000);
+    expect(ebayWitness1300.pendingExternalReceivablesCadMinor).toBe(0);
+    expect(ebayWitness1300.accountingRevenueCadMinor).toBe(0);
+    expect(ebayWitness1300.distributableRealizedProfitPoolCadMinor).toBe(0);
+
+    // Witness B: eBay sale reconciled with actualPlatformFeeMinor = 1,500 -> bank cleared 8,500 -> full refund reversal
+    const ebayWitness1500 = computeSeparatedFinancialSnapshot(
+      makeBaseSnapshotInput({
+        sales: [
+          {
+            id: 'sale-ebay-1500',
+            organizationId: ORG_SALVAGE,
+            marketNode: 'DOMESTIC_ORIGIN',
+            domesticChannel: 'EBAY_MOTORS_SHIPPED',
+            paymentCurrency: 'CAD',
+            taxCollectionMode: 'MARKETPLACE_FACILITATOR_COLLECTED',
+            subtotalMinor: 10_000,
+            gstHstTaxCadMinor: 0,
+            taxOrVatMinor: 0,
+            platformFeeMinor: 1_500,
+            shippingCostMinor: 0,
+            itcReceivableCadMinor: 0,
+            isFeeTaxInvoiceVerified: false,
+            grossCollectedMinor: 10_000,
+            netRealizedCadMinor: 8_500,
+            bankClearedCadMinor: 8_500,
+            paymentSettlementState: 'REFUNDED_OR_CHARGED_BACK',
+            cashCustodyState: 'SETTLED_ORIGIN_CORP_BANK',
+            bankSettledAt: '2026-04-06T12:00:00Z',
+            bankDepositReference: 'EBAY-DEP-1500',
+            isVoidedOrReversed: true,
+          },
+        ],
+        refundAdjustments: [
+          {
+            id: 'adj-ebay-1500',
+            organizationId: ORG_SALVAGE,
+            originalSaleId: 'sale-ebay-1500',
+            taxCollectionMode: 'MARKETPLACE_FACILITATOR_COLLECTED',
+            subtotalAdjustmentMinor: -10_000,
+            gstHstAdjustmentCadMinor: 0,
+            provincialTaxAdjustmentCadMinor: 0,
+            itcAdjustmentCadMinor: 0,
+            grossAdjustmentMinor: -10_000,
+            netRealizedCadAdjustmentMinor: -8_500,
+            bankCashAdjustmentCadMinor: -8_500,
+            refundSettlementAccount: 'CORP_BANK',
+          },
+        ],
+      }),
+      policy,
+    );
+    expect(ebayWitness1500.confirmedCorpBankCashCadMinor).toBe(2_200_000);
+    expect(ebayWitness1500.distributableRealizedProfitPoolCadMinor).toBe(0);
+
+    // Witness C: Pending Interac e-Transfer cancellation uses gAdj (-11,300) against gross pending receivable
+    const pendingDirectCancelled = computeSeparatedFinancialSnapshot(
+      makeBaseSnapshotInput({
+        sales: [
+          {
+            id: 'sale-pending-direct',
+            organizationId: ORG_SALVAGE,
+            marketNode: 'DOMESTIC_ORIGIN',
+            domesticChannel: 'FB_MARKETPLACE_LOCAL',
+            paymentCurrency: 'CAD',
+            taxCollectionMode: 'DIRECT_SELLER_COLLECTED',
+            subtotalMinor: 10_000,
+            gstHstTaxCadMinor: 1_300,
+            taxOrVatMinor: 1_300,
+            platformFeeMinor: 0,
+            shippingCostMinor: 0,
+            itcReceivableCadMinor: 0,
+            isFeeTaxInvoiceVerified: false,
+            grossCollectedMinor: 11_300,
+            netRealizedCadMinor: 10_000,
+            paymentSettlementState: 'REFUNDED_OR_CHARGED_BACK',
+            cashCustodyState: 'PENDING_EXTERNAL_RECEIVABLE',
+            isVoidedOrReversed: true,
+          },
+        ],
+        refundAdjustments: [
+          {
+            id: 'adj-pending-direct',
+            organizationId: ORG_SALVAGE,
+            originalSaleId: 'sale-pending-direct',
+            taxCollectionMode: 'DIRECT_SELLER_COLLECTED',
+            subtotalAdjustmentMinor: -10_000,
+            gstHstAdjustmentCadMinor: -1_300,
+            provincialTaxAdjustmentCadMinor: 0,
+            itcAdjustmentCadMinor: 0,
+            grossAdjustmentMinor: -11_300,
+            netRealizedCadAdjustmentMinor: -10_000,
+            refundSettlementAccount: 'PENDING_EXTERNAL_RECEIVABLE',
+          },
+        ],
+      }),
+      policy,
+    );
+    expect(pendingDirectCancelled.pendingExternalReceivablesCadMinor).toBe(0);
+    expect(pendingDirectCancelled.confirmedCorpBankCashCadMinor).toBe(2_200_000);
+    expect(pendingDirectCancelled.netHstTrustLiabilityCadMinor).toBe(0);
+
+    // Rejects invalid bankCashAdjustmentCadMinor on non-CORP_BANK settlement account
+    expect(() =>
+      computeSeparatedFinancialSnapshot(
+        makeBaseSnapshotInput({
+          sales: [
+            {
+              id: 'sale-float-bad',
+              organizationId: ORG_SALVAGE,
+              marketNode: 'DOMESTIC_ORIGIN',
+              domesticChannel: 'LOCAL_WALK_IN_CASH',
+              paymentCurrency: 'CAD',
+              taxCollectionMode: 'DIRECT_SELLER_COLLECTED',
+              subtotalMinor: 10_000,
+              gstHstTaxCadMinor: 1_300,
+              taxOrVatMinor: 1_300,
+              platformFeeMinor: 0,
+              shippingCostMinor: 0,
+              itcReceivableCadMinor: 0,
+              isFeeTaxInvoiceVerified: false,
+              grossCollectedMinor: 11_300,
+              netRealizedCadMinor: 10_000,
+              paymentSettlementState: 'REFUNDED_OR_CHARGED_BACK',
+              cashCustodyState: 'HELD_IN_OPERATOR_FLOAT',
+              soldByUserId: 'hunter-1',
+              isVoidedOrReversed: true,
+            },
+          ],
+          refundAdjustments: [
+            {
+              id: 'adj-float-bad',
+              organizationId: ORG_SALVAGE,
+              originalSaleId: 'sale-float-bad',
+              taxCollectionMode: 'DIRECT_SELLER_COLLECTED',
+              subtotalAdjustmentMinor: -10_000,
+              gstHstAdjustmentCadMinor: -1_300,
+              provincialTaxAdjustmentCadMinor: 0,
+              itcAdjustmentCadMinor: 0,
+              grossAdjustmentMinor: -11_300,
+              netRealizedCadAdjustmentMinor: -10_000,
+              bankCashAdjustmentCadMinor: -500,
+              refundSettlementAccount: 'OPERATOR_FLOAT',
+            },
+          ],
+        }),
+        policy,
+      ),
+    ).toThrowError(DomainRuleError);
+  });
 });

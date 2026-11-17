@@ -227,7 +227,9 @@ export type PartTransitionEvent =
 export interface PartTransitionFacts {
   readonly ebayListingId?: string | null;
   readonly ebayDelistAttested?: boolean;
+  readonly domesticChannel?: DomesticSaleChannel;
   readonly tdgHazmatCode?: TdgHazmatCode;
+  readonly isHazmatOrAirbag?: boolean;
   readonly weightKg?: number;
   readonly heavyLocalOnlyThresholdKg?: number;
   readonly originBinBarcode?: string | null;
@@ -347,12 +349,11 @@ export function validatePartTransition(
       assertNotQcHeldOrQuarantined(current);
       if (
         current.custodyState !== 'SHELVED_ORIGIN_CONTAINER' ||
-        current.availabilityState !== 'AVAILABLE' ||
-        current.complianceState !== 'CLEARED_FOR_SALE'
+        current.availabilityState !== 'AVAILABLE'
       ) {
         throw new DomainRuleError(
           'INVALID_PART_TRANSITION',
-          'Part must be SHELVED_ORIGIN_CONTAINER, AVAILABLE, and CLEARED_FOR_SALE for eBay CSV export.',
+          'Part must be SHELVED_ORIGIN_CONTAINER, AVAILABLE, and non-quarantined for eBay CSV export.',
         );
       }
       if (
@@ -364,7 +365,11 @@ export function validatePartTransition(
           `Cannot export eBay CSV from ebaySyncState ${current.ebaySyncState}.`,
         );
       }
-      if (!facts.tdgHazmatCode || facts.tdgHazmatCode !== 'NONE') {
+      if (
+        !facts.tdgHazmatCode ||
+        facts.tdgHazmatCode !== 'NONE' ||
+        facts.isHazmatOrAirbag === true
+      ) {
         throw new DomainRuleError(
           'HAZMAT_PARCEL_SHIPPING_BLOCKED',
           'TDG hazmat parts cannot be exported for eBay parcel shipping.',
@@ -396,7 +401,6 @@ export function validatePartTransition(
       if (
         current.custodyState !== 'SHELVED_ORIGIN_CONTAINER' ||
         current.availabilityState !== 'AVAILABLE' ||
-        current.complianceState !== 'CLEARED_FOR_SALE' ||
         current.ebaySyncState !== 'CSV_EXPORTED_PENDING_CONFIRMATION'
       ) {
         throw new DomainRuleError(
@@ -501,16 +505,26 @@ export function validatePartTransition(
       }
 
       let nextEbaySyncState = current.ebaySyncState;
-      if (current.ebaySyncState === 'SYNDICATED_LIVE') {
-        if (facts.ebayDelistAttested !== true) {
-          throw new DomainRuleError(
-            'EBAY_DELIST_ATTESTATION_REQUIRED',
-            'Operator must attest "Delist on eBay First" when checking out a SYNDICATED_LIVE part locally.',
-          );
+      const isEbayChannel = facts.domesticChannel === 'EBAY_MOTORS_SHIPPED';
+      if (isEbayChannel) {
+        if (
+          current.ebaySyncState === 'SYNDICATED_LIVE' ||
+          current.ebaySyncState === 'CSV_EXPORTED_PENDING_CONFIRMATION'
+        ) {
+          nextEbaySyncState = 'DELISTED';
         }
-        nextEbaySyncState = 'DELIST_PENDING';
-      } else if (current.ebaySyncState === 'CSV_EXPORTED_PENDING_CONFIRMATION') {
-        nextEbaySyncState = 'DELIST_PENDING';
+      } else {
+        if (current.ebaySyncState === 'SYNDICATED_LIVE') {
+          if (facts.ebayDelistAttested !== true) {
+            throw new DomainRuleError(
+              'EBAY_DELIST_ATTESTATION_REQUIRED',
+              'Operator must attest "Delist on eBay First" when checking out a SYNDICATED_LIVE part locally.',
+            );
+          }
+          nextEbaySyncState = 'DELIST_PENDING';
+        } else if (current.ebaySyncState === 'CSV_EXPORTED_PENDING_CONFIRMATION') {
+          nextEbaySyncState = 'DELIST_PENDING';
+        }
       }
 
       const nextClassifiedsState: ClassifiedsSyncState =
