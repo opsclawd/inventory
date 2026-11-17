@@ -50,6 +50,7 @@ export interface PersistedSaleLedgerRow {
   readonly taxOrVatMinor: number;
   readonly buyerTaxRemittedByPlatformMinor: number | null;
   readonly platformFeeMinor: number;
+  readonly actualPlatformFeeMinor?: number | null;
   readonly shippingCostMinor: number;
   readonly estimatedPlatformFeeTaxCadMinor: number;
   readonly itcReceivableCadMinor: number;
@@ -317,6 +318,18 @@ export function buildPersistedLedgerProjection(params: {
       typeof original.feeTaxInvoiceStorageKey === 'string' &&
       original.feeTaxInvoiceStorageKey.trim().length > 0;
 
+    const origEffectiveFee =
+      original.actualPlatformFeeMinor ?? original.platformFeeMinor;
+    const isFullEbayCorpBankReversal =
+      refundSettlementAccount === 'CORP_BANK' &&
+      original.cashCustodyState === 'SETTLED_ORIGIN_CORP_BANK' &&
+      (original.domesticChannel === 'EBAY_MOTORS_SHIPPED' ||
+        original.taxCollectionMode === 'MARKETPLACE_FACILITATOR_COLLECTED') &&
+      Math.abs(rev.grossCollectedMinor) === original.grossCollectedMinor;
+    const bankCashAdjustmentCadMinor = isFullEbayCorpBankReversal
+      ? -Math.max(0, original.grossCollectedMinor - origEffectiveFee)
+      : undefined;
+
     refundAdjustments.push({
       id: revId,
       organizationId: normalizedOrgId,
@@ -332,6 +345,9 @@ export function buildPersistedLedgerProjection(params: {
       subtotalAdjustmentMinor: subtotalAdj,
       grossAdjustmentMinor: grossAdj,
       netRealizedCadAdjustmentMinor: netAdj,
+      ...(bankCashAdjustmentCadMinor !== undefined
+        ? { bankCashAdjustmentCadMinor }
+        : {}),
       refundSettlementAccount,
       custodyHolderUserId: rev.soldByUserId.toLowerCase(),
     });
@@ -341,37 +357,55 @@ export function buildPersistedLedgerProjection(params: {
     reversalsByOriginalSaleId.set(targetId, list);
   }
 
-  const sales: SnapshotSaleRow[] = baseSaleRows.map((row) => ({
-    id: row.id.toLowerCase(),
-    organizationId: row.organizationId.toLowerCase(),
-    marketNode: row.marketNode,
-    domesticChannel: row.domesticChannel,
-    exportChannel: row.exportChannel,
-    paymentCurrency: row.paymentCurrency,
-    taxCollectionMode: row.taxCollectionMode,
-    subtotalMinor: row.subtotalMinor,
-    gstHstTaxCadMinor:
+  const sales: SnapshotSaleRow[] = baseSaleRows.map((row) => {
+    const effectiveFee = row.actualPlatformFeeMinor ?? row.platformFeeMinor;
+    const hasActualFeeOverride =
+      row.actualPlatformFeeMinor !== null &&
+      row.actualPlatformFeeMinor !== undefined;
+    const effectiveNet =
+      hasActualFeeOverride &&
       row.marketNode === 'DOMESTIC_ORIGIN' &&
-      row.taxCollectionMode === 'DIRECT_SELLER_COLLECTED'
-        ? row.taxOrVatMinor
-        : 0,
-    taxOrVatMinor: row.taxOrVatMinor,
-    buyerTaxRemittedByPlatformMinor: row.buyerTaxRemittedByPlatformMinor,
-    platformFeeMinor: row.platformFeeMinor,
-    shippingCostMinor: row.shippingCostMinor,
-    estimatedPlatformFeeTaxCadMinor: row.estimatedPlatformFeeTaxCadMinor,
-    itcReceivableCadMinor: row.itcReceivableCadMinor,
-    isFeeTaxInvoiceVerified: row.isFeeTaxInvoiceVerified,
-    feeTaxInvoiceStorageKey: row.feeTaxInvoiceStorageKey,
-    grossCollectedMinor: row.grossCollectedMinor,
-    netRealizedCadMinor: row.netRealizedCadMinor,
-    paymentSettlementState: row.paymentSettlementState,
-    cashCustodyState: row.cashCustodyState,
-    bankSettledAt: row.bankSettledAt,
-    bankDepositReference: row.bankDepositReference,
-    soldByUserId: row.soldByUserId.toLowerCase(),
-    isVoidedOrReversed: row.isVoidedOrReversed,
-  }));
+      row.paymentCurrency === 'CAD'
+        ? row.subtotalMinor - effectiveFee - row.shippingCostMinor
+        : row.netRealizedCadMinor;
+    const bankClearedCadMinor =
+      row.cashCustodyState === 'SETTLED_ORIGIN_CORP_BANK'
+        ? Math.max(0, row.grossCollectedMinor - effectiveFee)
+        : undefined;
+
+    return {
+      id: row.id.toLowerCase(),
+      organizationId: row.organizationId.toLowerCase(),
+      marketNode: row.marketNode,
+      domesticChannel: row.domesticChannel,
+      exportChannel: row.exportChannel,
+      paymentCurrency: row.paymentCurrency,
+      taxCollectionMode: row.taxCollectionMode,
+      subtotalMinor: row.subtotalMinor,
+      gstHstTaxCadMinor:
+        row.marketNode === 'DOMESTIC_ORIGIN' &&
+        row.taxCollectionMode === 'DIRECT_SELLER_COLLECTED'
+          ? row.taxOrVatMinor
+          : 0,
+      taxOrVatMinor: row.taxOrVatMinor,
+      buyerTaxRemittedByPlatformMinor: row.buyerTaxRemittedByPlatformMinor,
+      platformFeeMinor: effectiveFee,
+      shippingCostMinor: row.shippingCostMinor,
+      estimatedPlatformFeeTaxCadMinor: row.estimatedPlatformFeeTaxCadMinor,
+      itcReceivableCadMinor: row.itcReceivableCadMinor,
+      isFeeTaxInvoiceVerified: row.isFeeTaxInvoiceVerified,
+      feeTaxInvoiceStorageKey: row.feeTaxInvoiceStorageKey,
+      grossCollectedMinor: row.grossCollectedMinor,
+      netRealizedCadMinor: effectiveNet,
+      ...(bankClearedCadMinor !== undefined ? { bankClearedCadMinor } : {}),
+      paymentSettlementState: row.paymentSettlementState,
+      cashCustodyState: row.cashCustodyState,
+      bankSettledAt: row.bankSettledAt,
+      bankDepositReference: row.bankDepositReference,
+      soldByUserId: row.soldByUserId.toLowerCase(),
+      isVoidedOrReversed: row.isVoidedOrReversed,
+    };
+  });
 
   const scrapLogs: SnapshotScrapRow[] = params.scrapRows.map((row) => ({
     id: row.id.toLowerCase(),
@@ -807,6 +841,7 @@ export async function loadPersistedFinancialSnapshot(
         taxOrVatMinor: true,
         buyerTaxRemittedByPlatformMinor: true,
         platformFeeMinor: true,
+        actualPlatformFeeMinor: true,
         shippingCostMinor: true,
         estimatedPlatformFeeTaxCadMinor: true,
         itcReceivableCadMinor: true,

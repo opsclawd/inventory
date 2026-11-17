@@ -986,6 +986,7 @@ model SaleTransaction {
   cfoOverrideApprovedBy               User?                  @relation("CfoOverrideApprover", fields: [cfoOverrideApprovedById], references: [id])
   cfoOverrideReasonNote               String?
   platformFeeMinor                    Int                    @default(0) // $0 for FB/Walk-In; pre-tax seller fee for EBAY_MOTORS_SHIPPED
+  actualPlatformFeeMinor              Int?                   // Reconciled actual seller fee on EBAY_MOTORS_SHIPPED once bank-settled (immutable once set; null falls back to platformFeeMinor)
   shippingCostMinor                   Int                    @default(0) // $0 for Local Pickup; Courier label cost for shipped orders
   taxCollectionMode                   TaxCollectionMode      @default(DIRECT_SELLER_COLLECTED)
   appliedTaxJurisdiction              String                 @default("CA-ON") // e.g., "CA-ON", "CA-NS", "CA-QC", "EXPORT-OUTSIDE-CA", "TT"

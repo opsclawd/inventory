@@ -1119,4 +1119,100 @@ describe('Two-stage donor cost allocation', () => {
       }),
     ).toThrowError(DomainRuleError);
   });
+
+  it('enforces Issue #10 shelved/non-hazmat/non-quarantined rules on EXPORT_EBAY_CSV & CONFIRM_EBAY_LIVE and channel-scoped attestation on CHECKOUT_DOMESTIC', () => {
+    const shelvedClean: PartStateSnapshot = {
+      custodyState: 'SHELVED_ORIGIN_CONTAINER',
+      availabilityState: 'AVAILABLE',
+      ebaySyncState: 'NOT_LISTED',
+      classifiedsSyncState: 'NOT_POSTED',
+      complianceState: 'CLEARED_FOR_SALE',
+    };
+
+    // Blocks EXPORT_EBAY_CSV for non-shelved, hazmat, or quarantined states
+    expect(() =>
+      validatePartTransition(
+        { ...shelvedClean, custodyState: 'STRIPPED_RAW_OFFLINE' },
+        'EXPORT_EBAY_CSV',
+        {
+          tdgHazmatCode: 'NONE',
+          isHazmatOrAirbag: false,
+          weightKg: 6.4,
+          heavyLocalOnlyThresholdKg: 15.0,
+        },
+      ),
+    ).toThrowError(DomainRuleError);
+
+    expect(() =>
+      validatePartTransition(shelvedClean, 'EXPORT_EBAY_CSV', {
+        tdgHazmatCode: 'UN2794_WET_BATTERY',
+        isHazmatOrAirbag: true,
+        weightKg: 6.4,
+        heavyLocalOnlyThresholdKg: 15.0,
+      }),
+    ).toThrowError(DomainRuleError);
+
+    expect(() =>
+      validatePartTransition(
+        { ...shelvedClean, complianceState: 'QUARANTINED_RECALL_OR_DG' },
+        'EXPORT_EBAY_CSV',
+        {
+          tdgHazmatCode: 'NONE',
+          isHazmatOrAirbag: false,
+          weightKg: 6.4,
+          heavyLocalOnlyThresholdKg: 15.0,
+        },
+      ),
+    ).toThrowError(DomainRuleError);
+
+    const exported = validatePartTransition(shelvedClean, 'EXPORT_EBAY_CSV', {
+      tdgHazmatCode: 'NONE',
+      isHazmatOrAirbag: false,
+      weightKg: 6.4,
+      heavyLocalOnlyThresholdKg: 15.0,
+    });
+    expect(exported.nextState.ebaySyncState).toBe(
+      'CSV_EXPORTED_PENDING_CONFIRMATION',
+    );
+
+    const live = validatePartTransition(
+      exported.nextState,
+      'CONFIRM_EBAY_LIVE',
+      {
+        ebayListingId: '285912345678',
+        tdgHazmatCode: 'NONE',
+        isHazmatOrAirbag: false,
+      },
+    );
+    expect(live.nextState.ebaySyncState).toBe('SYNDICATED_LIVE');
+
+    // Local checkout of SYNDICATED_LIVE requires eBay delist attestation -> DELIST_PENDING
+    expect(() =>
+      validatePartTransition(live.nextState, 'CHECKOUT_DOMESTIC', {
+        ebayDelistAttested: false,
+        domesticChannel: 'LOCAL_WALK_IN_CASH',
+      }),
+    ).toThrowError(DomainRuleError);
+
+    const localSold = validatePartTransition(
+      live.nextState,
+      'CHECKOUT_DOMESTIC',
+      {
+        ebayDelistAttested: true,
+        domesticChannel: 'FB_MARKETPLACE_LOCAL',
+      },
+    );
+    expect(localSold.nextState.ebaySyncState).toBe('DELIST_PENDING');
+
+    // EBAY_MOTORS_SHIPPED checkout skips attestation & marks DELISTED cleanly
+    const ebaySold = validatePartTransition(
+      live.nextState,
+      'CHECKOUT_DOMESTIC',
+      {
+        ebayDelistAttested: false,
+        domesticChannel: 'EBAY_MOTORS_SHIPPED',
+      },
+    );
+    expect(ebaySold.nextState.ebaySyncState).toBe('DELISTED');
+  });
 });
